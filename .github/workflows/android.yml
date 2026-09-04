@@ -8,10 +8,13 @@ on:
     branches:
       - claude/poker-money-tracker-app-s1l0x4
       - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
+# Zum Anlegen eines Release (der Download-Link) wird Schreibrecht gebraucht.
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   apk:
@@ -57,3 +60,25 @@ jobs:
           name: pokerkasse-apk
           path: android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+
+      # Bei einem Versions-Tag zusätzlich als Release veröffentlichen. Das ergibt
+      # einen ganz normalen Download-Link, den jedes Handy direkt öffnen kann:
+      # https://github.com/<benutzer>/PokerApp/releases/latest/download/pokerkasse.apk
+      - name: Als Release veröffentlichen
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk pokerkasse.apk
+          printf '%s\n' \
+            'Android-App zum Installieren.' \
+            '' \
+            "**Direkter Download:** https://github.com/$REPO/releases/latest/download/pokerkasse.apk" \
+            '' \
+            'Auf dem Handy öffnen, bei der Rückfrage *Unbekannte Apps installieren* erlauben, dann *Installieren*. Ab Android 6.' \
+            '' \
+            'Die Web-App läuft weiterhin unter https://derfriedelbube.github.io/PokerApp/ – auch auf dem iPhone.' \
+            > notes.md
+          gh release create "$GITHUB_REF_NAME" pokerkasse.apk \
+            --title "Pokerkasse $GITHUB_REF_NAME" --notes-file notes.md
