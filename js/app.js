@@ -1,0 +1,1284 @@
+/**
+ * Pokerkasse – Oberfläche.
+ * Die Rechenlogik steckt in core.js; hier geht es nur um Darstellung,
+ * Eingaben und das Speichern im Browser (localStorage).
+ */
+(function () {
+  'use strict';
+
+  var C = window.PokerCore;
+  var KEY = 'pokerkasse.v1';
+  var DRAFT_KEY = 'pokerkasse.draft.v1';
+  var SVG_NS = 'http://www.w3.org/2000/svg';
+
+  var state = null;      // gespeicherte Daten (Spieler + Ereignisse)
+  var draft = null;      // die Runde, die gerade eingetragen wird
+  var view = 'game';
+  var storageWarned = false;
+  var deferredInstall = null;
+  var toastTimer = null;
+
+  /* =============================================================== Helfer */
+
+  function byId(id) { return document.getElementById(id); }
+
+  function h(tag, props, kids) {
+    var e = document.createElement(tag);
+    if (props) Object.keys(props).forEach(function (k) {
+      var v = props[k];
+      if (v === null || v === undefined || v === false) return;
+      if (k === 'class') e.className = v;
+      else if (k === 'text') e.textContent = v;
+      else if (k.slice(0, 2) === 'on') e.addEventListener(k.slice(2).toLowerCase(), v);
+      else e.setAttribute(k, v === true ? '' : v);
+    });
+    (kids || []).forEach(function (k) {
+      if (k === null || k === undefined || k === false) return;
+      e.appendChild(typeof k === 'object' ? k : document.createTextNode(String(k)));
+    });
+    return e;
+  }
+
+  function icon(name, cls) {
+    var svg = document.createElementNS(SVG_NS, 'svg');
+    svg.setAttribute('aria-hidden', 'true');
+    if (cls) svg.setAttribute('class', cls);
+    var use = document.createElementNS(SVG_NS, 'use');
+    use.setAttribute('href', '#' + name);
+    svg.appendChild(use);
+    return svg;
+  }
+
+  function dedupe(list) {
+    return list.filter(function (v, i) { return list.indexOf(v) === i; }).sort(function (a, b) { return a - b; });
+  }
+
+  function money(cents) { return C.formatMoney(cents, state.settings.currency); }
+  function signed(cents) { return C.formatSigned(cents, state.settings.currency); }
+
+  function playerById(id) {
+    for (var i = 0; i < state.players.length; i++) {
+      if (state.players[i].id === id) return state.players[i];
+    }
+    return null;
+  }
+  function nameOf(id) { var p = playerById(id); return p ? p.name : 'Unbekannt'; }
+
+  /** Farbe und Initialen für das Spieler-Kürzel, stabil aus dem Namen abgeleitet. */
+  function avatar(player) {
+    var hash = 0;
+    for (var i = 0; i < player.name.length; i++) hash = (hash * 31 + player.name.charCodeAt(i)) | 0;
+    var hue = Math.abs(hash) % 360;
+    var initials = player.name.trim().split(/\s+/).slice(0, 2)
+      .map(function (w) { return w.charAt(0); }).join('').toUpperCase() || '?';
+    return h('div', {
+      class: 'avatar',
+      style: 'background: hsl(' + hue + ' 62% 62%)'
+    }, [initials]);
+  }
+
+  /* ========================================================== Persistenz */
+
+  function load() {
+    var raw = null;
+    try { raw = localStorage.getItem(KEY); } catch (e) { /* Privatmodus */ }
+    if (!raw) return C.createState();
+    try { return C.normalizeState(JSON.parse(raw)); }
+    catch (e) { return C.createState(); }
+  }
+
+  function save() {
+    try {
+      localStorage.setItem(KEY, JSON.stringify(state));
+    } catch (e) {
+      if (!storageWarned) {
+        storageWarned = true;
+        toast('Speichern nicht möglich – Daten gehen beim Schließen verloren.');
+      }
+    }
+  }
+
+  function emptyDraft() {
+    return { bets: {}, winners: [], mode: 'even', manual: {}, chip: null, note: '' };
+  }
+
+  function loadDraft() {
+    var d = emptyDraft();
+    var raw = null;
+    try { raw = JSON.parse(localStorage.getItem(DRAFT_KEY) || 'null'); } catch (e) { /* egal */ }
+    if (raw && typeof raw === 'object') {
+      try {
+        // Nur Einträge übernehmen, deren Spieler es noch gibt.
+        Object.keys(raw.bets || {}).forEach(function (id) {
+          var amt = Math.round(Number(raw.bets[id]) || 0);
+          if (playerById(id) && amt > 0) d.bets[id] = amt;
+        });
+        d.winners = (raw.winners || []).filter(playerById);
+        d.mode = raw.mode === 'manual' ? 'manual' : 'even';
+        Object.keys(raw.manual || {}).forEach(function (id) {
+          if (playerById(id)) d.manual[id] = Math.round(Number(raw.manual[id]) || 0);
+        });
+        d.note = String(raw.note || '').slice(0, 120);
+        d.chip = Math.round(Number(raw.chip)) || null;
+      } catch (e) { /* unbrauchbarer Entwurf -> leer starten */ }
+    }
+    var chips = state.settings.chips;
+    d.chip = chips.indexOf(d.chip) !== -1 ? d.chip : chips[Math.min(1, chips.length - 1)];
+    return d;
+  }
+
+  function saveDraft() {
+    try { localStorage.setItem(DRAFT_KEY, JSON.stringify(draft)); } catch (e) { /* egal */ }
+  }
+
+  function resetDraft() {
+    var chip = draft ? draft.chip : null;
+    draft = emptyDraft();
+    draft.chip = chip || state.settings.chips[Math.min(1, state.settings.chips.length - 1)];
+    saveDraft();
+  }
+
+  function addEvent(ev) {
+    ev.id = ev.id || C.uid('e');
+    ev.ts = ev.ts || Date.now();
+    state.events.push(ev);
+    save();
+    return ev;
+  }
+
+  function removeEvent(id) {
+    state.events = state.events.filter(function (e) { return e.id !== id; });
+    save();
+  }
+
+  /* =============================================================== Toast */
+
+  function toast(msg, action) {
+    var box = byId('toast');
+    box.textContent = '';
+    box.appendChild(h('div', { class: 'msg', text: msg }));
+    if (action) {
+      box.appendChild(h('button', {
+        type: 'button', text: action.label,
+        onclick: function () { hideToast(); action.run(); }
+      }));
+    }
+    box.classList.remove('hidden');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(hideToast, action ? 7000 : 3200);
+  }
+  function hideToast() { clearTimeout(toastTimer); byId('toast').classList.add('hidden'); }
+
+  /* =============================================================== Modal */
+
+  function closeModal() {
+    var root = byId('modal-root');
+    root.classList.add('hidden');
+    root.textContent = '';
+  }
+
+  /**
+   * Sheet von unten. `opts.body` sind DOM-Knoten, `opts.actions` die Buttons.
+   */
+  function modal(opts) {
+    var root = byId('modal-root');
+    root.textContent = '';
+    var sheet = h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true' }, [
+      h('h2', { text: opts.title }),
+      opts.sub ? h('p', { class: 'modal-sub', text: opts.sub }) : null
+    ]);
+    (opts.body || []).forEach(function (n) { if (n) sheet.appendChild(n); });
+
+    var actions = h('div', { class: 'modal-actions' });
+    (opts.actions || [{ label: 'Schließen' }]).forEach(function (a) {
+      actions.appendChild(h('button', {
+        type: 'button',
+        class: 'btn ' + (a.kind === 'primary' ? 'btn-primary' : a.kind === 'danger' ? 'btn-danger' : ''),
+        text: a.label,
+        onclick: function () { if (!a.run || a.run() !== false) closeModal(); }
+      }));
+    });
+    sheet.appendChild(actions);
+
+    root.appendChild(sheet);
+    root.classList.remove('hidden');
+    root.onclick = function (e) { if (e.target === root) closeModal(); };
+    if (opts.focus !== false) {
+      var f = sheet.querySelector('input, textarea');
+      if (f) setTimeout(function () { f.focus(); f.select && f.select(); }, 60);
+    }
+    return sheet;
+  }
+
+  function confirmModal(title, sub, confirmLabel, run) {
+    modal({
+      title: title, sub: sub,
+      actions: [
+        { label: 'Abbrechen' },
+        { label: confirmLabel, kind: 'danger', run: run }
+      ]
+    });
+  }
+
+  /** Betrag abfragen – mit Schnellwahl-Chips für die üblichen Beträge. */
+  function askAmount(opts, done) {
+    var input = h('input', {
+      class: 'input', type: 'text', inputmode: 'decimal',
+      placeholder: '0,00', value: opts.value ? C.formatCents(opts.value) : ''
+    });
+    var quick = h('div', { class: 'chiprow' },
+      (opts.quick || [500, 1000, 2000, 5000]).map(function (v) {
+        return h('button', {
+          type: 'button', class: 'chip', text: C.formatCents(v),
+          onclick: function () { input.value = C.formatCents(v); input.focus(); }
+        });
+      }));
+
+    modal({
+      title: opts.title, sub: opts.sub,
+      body: [h('label', { class: 'field' }, [h('span', { text: opts.label || 'Betrag' }), input]), quick],
+      actions: [
+        { label: 'Abbrechen' },
+        {
+          label: opts.confirm || 'Übernehmen', kind: 'primary',
+          run: function () {
+            var cents = C.parseAmount(input.value);
+            if (cents === null || (!opts.allowNegative && cents <= 0)) {
+              toast('Bitte einen gültigen Betrag eingeben.');
+              return false;
+            }
+            done(cents);
+          }
+        }
+      ]
+    });
+  }
+
+  /* ============================================================ Ansichten */
+
+  function render() {
+    ['game', 'players', 'history', 'cash'].forEach(function (v) {
+      byId('view-' + v).classList.toggle('hidden', v !== view);
+    });
+    document.querySelectorAll('.tab').forEach(function (t) {
+      t.classList.toggle('is-active', t.dataset.view === view);
+    });
+    ({ game: renderGame, players: renderPlayers, history: renderHistory, cash: renderCash })[view]();
+  }
+
+  function emptyState(title, text, btnLabel, run) {
+    return h('div', { class: 'empty' }, [
+      h('strong', { text: title }),
+      h('div', { text: text }),
+      btnLabel ? h('button', {
+        type: 'button', class: 'btn btn-primary', style: 'margin-top:16px',
+        text: btnLabel, onclick: run
+      }) : null
+    ]);
+  }
+
+  /* ------------------------------------------------------------ 1. Spiel */
+
+  /** Alle Spieler, die in dieser Runde eine Zeile bekommen. */
+  function tablePlayers() {
+    return state.players.filter(function (p) {
+      return p.active || draft.bets[p.id] > 0;
+    });
+  }
+
+  function potTotal() {
+    return Object.keys(draft.bets).reduce(function (sum, id) {
+      return playerById(id) ? sum + (draft.bets[id] || 0) : sum;
+    }, 0);
+  }
+
+  /** Auszahlung je Gewinner nach aktueller Einstellung. */
+  function payouts(pot) {
+    if (draft.mode === 'manual') {
+      return draft.winners.map(function (id) {
+        return { playerId: id, amount: draft.manual[id] || 0, odd: false };
+      });
+    }
+    return C.splitEven(pot, draft.winners);
+  }
+
+  function canFinish(pot) {
+    if (pot <= 0) return { ok: false, msg: 'Noch keine Einsätze im Pot.' };
+    if (!draft.winners.length) return { ok: false, msg: 'Bitte mindestens einen Gewinner auswählen.' };
+    if (draft.mode === 'manual') {
+      var chk = C.checkManualSplit(pot, draft.winners.map(function (id) { return draft.manual[id] || 0; }));
+      if (!chk.ok) {
+        return { ok: false, msg: chk.diff > 0
+          ? 'Es sind noch ' + money(chk.diff) + ' im Pot übrig.'
+          : 'Es sind ' + money(-chk.diff) + ' zu viel verteilt.' };
+      }
+    }
+    return { ok: true };
+  }
+
+  function renderGame() {
+    var root = byId('view-game');
+    root.textContent = '';
+
+    if (!state.players.length) {
+      root.appendChild(emptyState(
+        'Willkommen bei der Pokerkasse',
+        'Lege zuerst deine Mitspieler an. Danach trägst du hier jede Runde ein: wer wie viel in den Pot legt und wer gewinnt.',
+        'Spieler anlegen', function () { view = 'players'; render(); }));
+      return;
+    }
+
+    var players = tablePlayers();
+
+    /* ---- Pot ---- */
+    var potAmount = h('div', { class: 'pot-amount' });
+    var potSub = h('div', { class: 'pot-sub' });
+    root.appendChild(h('div', { class: 'pot-dock' }, [
+      h('div', { class: 'pot' }, [
+        h('div', { class: 'pot-label', text: 'Pot' }), potAmount, potSub
+      ])
+    ]));
+
+    if (!players.length) {
+      root.appendChild(h('div', { class: 'card' }, [emptyState(
+        'Niemand am Tisch',
+        'Alle Spieler sitzen gerade aus. Schalte unter „Spieler“ mindestens einen wieder ein.',
+        'Zu den Spielern', function () { view = 'players'; render(); })]));
+      potAmount.textContent = money(0);
+      potAmount.classList.add('is-zero');
+      return;
+    }
+
+    /* ---- Einsätze ---- */
+    var chipRow = h('div', { class: 'chiprow' });
+    state.settings.chips.forEach(function (value) {
+      chipRow.appendChild(h('button', {
+        type: 'button',
+        class: 'chip' + (draft.chip === value ? ' is-active' : ''),
+        text: C.formatCents(value),
+        onclick: function () {
+          draft.chip = value; saveDraft();
+          chipRow.querySelectorAll('.chip').forEach(function (c, i) {
+            c.classList.toggle('is-active', state.settings.chips[i] === value);
+          });
+          allBtn.textContent = 'Alle +' + money(value);
+        }
+      }));
+    });
+
+    var rows = h('div', { class: 'rows' });
+    var inputs = {};
+    var balances = C.computeBalances(state);
+    players.forEach(function (p) {
+      var bal = balances[p.id] || 0;
+
+      var input = h('input', {
+        class: 'bet-input', type: 'text', inputmode: 'decimal', placeholder: '0,00',
+        'aria-label': 'Einsatz von ' + p.name,
+        value: draft.bets[p.id] ? C.formatCents(draft.bets[p.id]) : '',
+        onfocus: function () { input.select(); },
+        oninput: function () {
+          var cents = C.parseAmount(input.value);
+          setBet(p.id, cents === null ? 0 : Math.max(0, cents), false);
+        },
+        onblur: function () {
+          input.value = draft.bets[p.id] ? C.formatCents(draft.bets[p.id]) : '';
+          input.classList.toggle('has-value', !!draft.bets[p.id]);
+        }
+      });
+      input.classList.toggle('has-value', !!draft.bets[p.id]);
+      inputs[p.id] = input;
+
+      var row = h('div', { class: 'row' + (draft.bets[p.id] ? ' is-in' : '') }, [
+        avatar(p),
+        h('div', { class: 'who' }, [
+          h('div', { class: 'name', text: p.name + (p.active ? '' : ' (sitzt aus)') }),
+          h('div', { class: 'sub' + (bal < 0 ? ' is-neg' : ''), text: money(bal) })
+        ]),
+        h('button', {
+          type: 'button', class: 'step', 'aria-label': 'Einsatz verringern',
+          onclick: function () { setBet(p.id, Math.max(0, (draft.bets[p.id] || 0) - draft.chip), true); }
+        }, [icon('i-minus')]),
+        input,
+        h('button', {
+          type: 'button', class: 'step', 'aria-label': 'Einsatz erhöhen',
+          onclick: function () { setBet(p.id, (draft.bets[p.id] || 0) + draft.chip, true); }
+        }, [icon('i-plus')])
+      ]);
+      rows.appendChild(row);
+    });
+
+    var allBtn = h('button', {
+      type: 'button', class: 'btn btn-sm', text: 'Alle +' + money(draft.chip),
+      onclick: function () {
+        players.forEach(function (p) { setBet(p.id, (draft.bets[p.id] || 0) + draft.chip, true); });
+      }
+    });
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [
+        h('h2', { text: 'Einsätze' }),
+        h('button', {
+          type: 'button', class: 'link', text: 'Leeren',
+          onclick: function () {
+            draft.bets = {}; draft.winners = []; draft.manual = {}; saveDraft(); renderGame();
+          }
+        })
+      ]),
+      chipRow, rows,
+      h('div', { style: 'margin-top:12px' }, [allBtn])
+    ]));
+
+    /* ---- Gewinner ---- */
+    var winnerCard = h('div', { class: 'card' });
+    root.appendChild(winnerCard);
+
+    /* ---- Abschließen ---- */
+    var finishBtn = h('button', {
+      type: 'button', class: 'btn btn-primary btn-block btn-lg', text: 'Runde abschließen',
+      onclick: finishHand
+    });
+    root.appendChild(finishBtn);
+
+    /* -- Aktualisierung der abgeleiteten Anzeigen (ohne Neuaufbau der Inputs) -- */
+    function setBet(id, cents, writeInput) {
+      if (cents > 0) draft.bets[id] = cents; else delete draft.bets[id];
+      if (writeInput && inputs[id]) inputs[id].value = cents ? C.formatCents(cents) : '';
+      if (inputs[id]) {
+        inputs[id].classList.toggle('has-value', !!cents);
+        inputs[id].closest('.row').classList.toggle('is-in', !!cents);
+      }
+      saveDraft();
+      update();
+    }
+
+    function update() {
+      var pot = potTotal();
+      var inPot = Object.keys(draft.bets).filter(function (id) { return draft.bets[id] > 0; }).length;
+      potAmount.textContent = money(pot);
+      potAmount.classList.toggle('is-zero', pot === 0);
+      potSub.textContent = pot === 0
+        ? 'Trage die Einsätze der Runde ein'
+        : inPot + (inPot === 1 ? ' Spieler' : ' Spieler') + ' im Pot · Chip ' + money(draft.chip);
+      renderWinners(pot);
+      var chk = canFinish(pot);
+      finishBtn.disabled = !chk.ok;
+      finishBtn.textContent = chk.ok ? 'Runde abschließen · ' + money(pot) : 'Runde abschließen';
+    }
+
+    function renderWinners(pot) {
+      winnerCard.textContent = '';
+      winnerCard.classList.toggle('hidden', pot <= 0);
+      if (pot <= 0) return;
+
+      winnerCard.appendChild(h('div', { class: 'card-head' }, [
+        h('h2', { text: 'Wer gewinnt?' }),
+        h('span', { class: 'sub', text: draft.winners.length > 1 ? 'Split Pot' : '' })
+      ]));
+
+      var pills = h('div', { class: 'pills' }, players.map(function (p) {
+        var on = draft.winners.indexOf(p.id) !== -1;
+        return h('button', {
+          type: 'button', class: 'pill' + (on ? ' is-on' : ''), 'aria-pressed': on ? 'true' : 'false',
+          onclick: function () {
+            var i = draft.winners.indexOf(p.id);
+            if (i === -1) draft.winners.push(p.id); else draft.winners.splice(i, 1);
+            saveDraft(); update();
+          }
+        }, [icon('i-check'), p.name]);
+      }));
+      winnerCard.appendChild(pills);
+      if (!draft.winners.length) {
+        winnerCard.appendChild(h('p', { class: 'hint', text: 'Mehrere auswählen für einen geteilten Pot.' }));
+        return;
+      }
+
+      /* Aufteilung nur anbieten, wenn es mehr als einen Gewinner gibt. */
+      if (draft.winners.length > 1) {
+        winnerCard.appendChild(h('div', { class: 'segmented' }, [
+          h('button', {
+            type: 'button', class: draft.mode === 'even' ? 'is-on' : '', text: 'Gleichmäßig',
+            onclick: function () { draft.mode = 'even'; saveDraft(); update(); }
+          }),
+          h('button', {
+            type: 'button', class: draft.mode === 'manual' ? 'is-on' : '', text: 'Manuell',
+            onclick: function () {
+              draft.mode = 'manual';
+              // Mit der gleichmäßigen Aufteilung vorbelegen, damit nur noch
+              // korrigiert werden muss (typisch bei Side-Pots).
+              C.splitEven(pot, draft.winners).forEach(function (x) {
+                if (draft.manual[x.playerId] === undefined) draft.manual[x.playerId] = x.amount;
+              });
+              saveDraft(); update();
+            }
+          })
+        ]));
+      } else if (draft.mode === 'manual') {
+        draft.mode = 'even';
+      }
+
+      if (draft.mode === 'manual' && draft.winners.length > 1) {
+        var rest = h('div', { class: 'rest-note' });
+        var manualRows = h('div', { class: 'rows', style: 'margin-top:12px' },
+          draft.winners.map(function (id) {
+            var p = playerById(id);
+            var inp = h('input', {
+              class: 'bet-input', type: 'text', inputmode: 'decimal', placeholder: '0,00',
+              'aria-label': 'Anteil von ' + p.name,
+              value: draft.manual[id] ? C.formatCents(draft.manual[id]) : '',
+              onfocus: function () { inp.select(); },
+              oninput: function () {
+                var c = C.parseAmount(inp.value);
+                draft.manual[id] = c === null ? 0 : Math.max(0, c);
+                saveDraft(); updateRest();
+              }
+            });
+            return h('div', { class: 'row' }, [avatar(p), h('div', { class: 'who' }, [
+              h('div', { class: 'name', text: p.name })]), inp]);
+          }));
+        winnerCard.appendChild(manualRows);
+        winnerCard.appendChild(rest);
+
+        var updateRest = function () {
+          var chk = C.checkManualSplit(pot, draft.winners.map(function (i) { return draft.manual[i] || 0; }));
+          rest.className = 'rest-note ' + (chk.ok ? 'ok' : 'bad');
+          rest.textContent = chk.ok ? '✓ Pot vollständig verteilt'
+            : chk.diff > 0 ? 'Noch offen: ' + money(chk.diff)
+              : 'Zu viel verteilt: ' + money(-chk.diff);
+          finishBtn.disabled = !canFinish(pot).ok;
+        };
+        updateRest();
+      } else {
+        winnerCard.appendChild(h('div', { class: 'payout-preview' },
+          payouts(pot).map(function (x) {
+            return h('div', { class: 'payout-line' }, [
+              h('span', { class: 'nm', text: nameOf(x.playerId) }),
+              x.odd ? h('span', { class: 'tag', text: '+1 Cent Rest' }) : null,
+              h('span', { class: 'amt', text: '+' + money(x.amount) })
+            ]);
+          })));
+      }
+    }
+
+    update();
+  }
+
+  function finishHand() {
+    var pot = potTotal();
+    var chk = canFinish(pot);
+    if (!chk.ok) { toast(chk.msg); return; }
+
+    var contributions = Object.keys(draft.bets)
+      .filter(function (id) { return draft.bets[id] > 0 && playerById(id); })
+      .map(function (id) { return { playerId: id, amount: draft.bets[id] }; });
+
+    var ev = { type: 'hand', contributions: contributions,
+      payouts: payouts(pot).map(function (x) { return { playerId: x.playerId, amount: x.amount }; }) };
+    if (draft.note) ev.note = draft.note;
+
+    var snapshot = JSON.parse(JSON.stringify(draft));
+    addEvent(ev);
+    resetDraft();
+    renderGame();
+
+    var winners = ev.payouts.map(function (p) { return nameOf(p.playerId); }).join(' & ');
+    toast(money(pot) + ' an ' + winners, {
+      label: 'Rückgängig',
+      run: function () {
+        removeEvent(ev.id);
+        draft = snapshot;
+        saveDraft();
+        renderGame();
+        toast('Runde zurückgenommen.');
+      }
+    });
+  }
+
+  /* ---------------------------------------------------------- 2. Spieler */
+
+  function renderPlayers() {
+    var root = byId('view-players');
+    root.textContent = '';
+    var balances = C.computeBalances(state);
+    var stats = C.sessionStats(state);
+
+    var nameInput = h('input', {
+      class: 'input', type: 'text', placeholder: 'Name', maxlength: '40',
+      autocomplete: 'off', autocapitalize: 'words',
+      onkeydown: function (e) { if (e.key === 'Enter') addPlayer(); }
+    });
+    function addPlayer() {
+      var name = nameInput.value.trim();
+      if (!name) { nameInput.focus(); return; }
+      var dup = state.players.some(function (p) { return p.name.toLowerCase() === name.toLowerCase(); });
+      if (dup) { toast('„' + name + '“ gibt es schon.'); return; }
+      state.players.push(C.makePlayer(name));
+      save();
+      nameInput.value = '';
+      renderPlayers();
+    }
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h2', { text: 'Spieler hinzufügen' })]),
+      h('div', { class: 'inline-form' }, [
+        nameInput,
+        h('button', { type: 'button', class: 'btn btn-primary', text: 'Hinzufügen', onclick: addPlayer })
+      ])
+    ]));
+
+    if (!state.players.length) {
+      root.appendChild(h('div', { class: 'card' }, [emptyState(
+        'Noch keine Spieler', 'Trage oben die Namen aller Mitspieler ein.')]));
+      return;
+    }
+
+    var list = h('div', { class: 'rows' });
+    state.players.slice().sort(function (a, b) {
+      return (b.active - a.active) || a.name.localeCompare(b.name, 'de');
+    }).forEach(function (p) {
+      var bal = balances[p.id] || 0;
+      var net = stats[p.id] ? stats[p.id].net : 0;
+      var sub = money(bal) + (net !== 0 ? ' · heute ' + signed(net) : '');
+
+      var sw = h('button', {
+        type: 'button', class: 'switch' + (p.active ? ' is-on' : ''),
+        role: 'switch', 'aria-checked': p.active ? 'true' : 'false',
+        'aria-label': p.name + ' spielt mit',
+        onclick: function (e) {
+          e.stopPropagation();
+          p.active = !p.active;
+          save();
+          renderPlayers();
+        }
+      });
+
+      list.appendChild(h('div', {
+        class: 'row', style: p.active ? '' : 'opacity:.55',
+        onclick: function () { playerSheet(p); }
+      }, [
+        avatar(p),
+        h('div', { class: 'who' }, [
+          h('div', { class: 'name', text: p.name }),
+          h('div', { class: 'sub' + (bal < 0 ? ' is-neg' : ''), text: sub })
+        ]),
+        sw,
+        h('button', { type: 'button', class: 'step', 'aria-label': 'Bearbeiten' }, [icon('i-pencil')])
+      ]));
+    });
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [
+        h('h2', { text: 'Am Tisch' }),
+        h('span', { class: 'sub', text: state.players.filter(function (p) { return p.active; }).length + ' dabei' })
+      ]),
+      list,
+      h('p', { class: 'hint', text: 'Schalter aus = sitzt aus und erscheint nicht bei den Einsätzen. Tippe auf einen Namen für Ein- und Auszahlungen.' })
+    ]));
+  }
+
+  /** Aktionsmenü für einen einzelnen Spieler. */
+  function playerSheet(p) {
+    var bal = C.computeBalances(state)[p.id] || 0;
+    var st = C.sessionStats(state)[p.id];
+
+    function action(label, kind, run) {
+      return h('button', { type: 'button', class: 'btn btn-block ' + (kind || ''), text: label,
+        style: 'margin-bottom:8px', onclick: run });
+    }
+
+    modal({
+      title: p.name,
+      sub: 'Guthaben ' + money(bal) + ' · heute ' + signed(st ? st.net : 0),
+      focus: false,
+      body: [
+        action('Geld einzahlen', 'btn-primary', function () {
+          closeModal();
+          askAmount({
+            title: 'Einzahlung', sub: p.name + ' legt Geld in die Kasse.',
+            quick: dedupe(state.settings.chips.slice(-2).concat([2000, 5000]))
+          }, function (cents) {
+            addEvent({ type: 'deposit', playerId: p.id, amount: cents });
+            render();
+            toast(p.name + ' hat ' + money(cents) + ' eingezahlt.');
+          });
+        }),
+        action('Geld auszahlen', null, function () {
+          closeModal();
+          askAmount({
+            title: 'Auszahlung', sub: p.name + ' nimmt Geld aus der Kasse.',
+            value: bal > 0 ? bal : 0, quick: [1000, 2000, 5000]
+          }, function (cents) {
+            addEvent({ type: 'withdraw', playerId: p.id, amount: cents });
+            render();
+            toast(p.name + ' hat ' + money(cents) + ' erhalten.');
+          });
+        }),
+        action('Zahlung an Mitspieler', null, function () { closeModal(); transferSheet(p); }),
+        action('Guthaben korrigieren', null, function () {
+          closeModal();
+          askAmount({
+            title: 'Korrektur', label: 'Betrag (negativ = abziehen)',
+            sub: 'Rechnet den Betrag direkt auf das Guthaben von ' + p.name + '.',
+            allowNegative: true, quick: [100, 500, -100, -500]
+          }, function (cents) {
+            addEvent({ type: 'adjust', playerId: p.id, amount: cents });
+            render();
+            toast('Guthaben von ' + p.name + ' um ' + signed(cents) + ' geändert.');
+          });
+        }),
+        action('Umbenennen', null, function () {
+          closeModal();
+          var inp = h('input', { class: 'input', type: 'text', value: p.name, maxlength: '40' });
+          modal({
+            title: 'Spieler umbenennen',
+            body: [h('label', { class: 'field' }, [h('span', { text: 'Name' }), inp])],
+            actions: [{ label: 'Abbrechen' }, {
+              label: 'Speichern', kind: 'primary', run: function () {
+                var n = inp.value.trim();
+                if (!n) return false;
+                p.name = n; save(); render();
+              }
+            }]
+          });
+        }),
+        action('Spieler löschen', 'btn-danger', function () {
+          closeModal();
+          removePlayer(p);
+        })
+      ],
+      actions: [{ label: 'Schließen' }]
+    });
+  }
+
+  function transferSheet(from) {
+    var others = state.players.filter(function (p) { return p.id !== from.id; });
+    if (!others.length) { toast('Es gibt keinen zweiten Spieler.'); return; }
+
+    var targetId = others[0].id;
+    var pills = h('div', { class: 'pills', style: 'margin-bottom:14px' }, others.map(function (p) {
+      return h('button', {
+        type: 'button', class: 'pill' + (p.id === targetId ? ' is-on' : ''),
+        onclick: function () {
+          targetId = p.id;
+          pills.querySelectorAll('.pill').forEach(function (el, i) {
+            el.classList.toggle('is-on', others[i].id === targetId);
+          });
+        }
+      }, [icon('i-check'), p.name]);
+    }));
+    var input = h('input', { class: 'input', type: 'text', inputmode: 'decimal', placeholder: '0,00' });
+
+    modal({
+      title: 'Zahlung von ' + from.name,
+      sub: 'Bucht den Betrag direkt von einem Guthaben auf ein anderes.',
+      body: [
+        h('div', { style: 'font-size:12.5px;color:var(--muted);font-weight:600;margin-bottom:5px', text: 'An' }),
+        pills,
+        h('label', { class: 'field' }, [h('span', { text: 'Betrag' }), input])
+      ],
+      actions: [{ label: 'Abbrechen' }, {
+        label: 'Buchen', kind: 'primary', run: function () {
+          var cents = C.parseAmount(input.value);
+          if (cents === null || cents <= 0) { toast('Bitte einen gültigen Betrag eingeben.'); return false; }
+          addEvent({ type: 'transfer', fromId: from.id, toId: targetId, amount: cents });
+          render();
+          toast(from.name + ' → ' + nameOf(targetId) + ': ' + money(cents));
+        }
+      }]
+    });
+  }
+
+  function removePlayer(p) {
+    var used = state.events.some(function (e) {
+      return e.playerId === p.id || e.fromId === p.id || e.toId === p.id ||
+        (e.contributions || []).some(function (c) { return c.playerId === p.id; }) ||
+        (e.payouts || []).some(function (x) { return x.playerId === p.id; });
+    });
+    var sub = used
+      ? 'Alle Einträge von ' + p.name + ' werden mitgelöscht. Guthaben und Verlauf der anderen bleiben erhalten.'
+      : 'Der Spieler wird entfernt.';
+    confirmModal(p.name + ' löschen?', sub, 'Löschen', function () {
+      state.events = state.events.filter(function (e) {
+        if (e.playerId === p.id || e.fromId === p.id || e.toId === p.id) return false;
+        if (e.type === 'hand') {
+          e.contributions = e.contributions.filter(function (c) { return c.playerId !== p.id; });
+          e.payouts = e.payouts.filter(function (x) { return x.playerId !== p.id; });
+          return e.contributions.length || e.payouts.length;
+        }
+        return true;
+      });
+      state.players = state.players.filter(function (x) { return x.id !== p.id; });
+      delete draft.bets[p.id];
+      draft.winners = draft.winners.filter(function (id) { return id !== p.id; });
+      save(); saveDraft(); render();
+      toast(p.name + ' wurde gelöscht.');
+    });
+  }
+
+  /* ---------------------------------------------------------- 3. Verlauf */
+
+  var historyLimit = 60;
+
+  function dayLabel(ts) {
+    var d = new Date(ts), now = new Date();
+    var same = function (a, b) { return a.toDateString() === b.toDateString(); };
+    var yest = new Date(now.getTime() - 864e5);
+    if (same(d, now)) return 'Heute';
+    if (same(d, yest)) return 'Gestern';
+    return d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
+  function timeLabel(ts) {
+    return new Date(ts).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
+  }
+
+  function describe(ev) {
+    switch (ev.type) {
+      case 'hand': {
+        var pot = ev.contributions.reduce(function (s, c) { return s + c.amount; }, 0);
+        var winners = ev.payouts.map(function (x) { return nameOf(x.playerId); });
+        var players = ev.contributions.map(function (c) { return nameOf(c.playerId); });
+        return {
+          icon: 'i-spade', cls: 'win',
+          title: (winners.length > 1 ? 'Split Pot' : 'Pot') + ' · ' + money(pot),
+          sub: players.join(', ') + ' → ',
+          winners: winners.join(' & '),
+          amount: money(pot), amountCls: ''
+        };
+      }
+      case 'deposit':
+        return { icon: 'i-money', cls: 'cash', title: nameOf(ev.playerId) + ' zahlt ein',
+          sub: 'Einzahlung in die Kasse', amount: '+' + money(ev.amount), amountCls: 'pos' };
+      case 'withdraw':
+        return { icon: 'i-money', cls: 'cash', title: nameOf(ev.playerId) + ' lässt auszahlen',
+          sub: 'Auszahlung aus der Kasse', amount: '−' + money(ev.amount), amountCls: 'neg' };
+      case 'transfer':
+        return { icon: 'i-arrow', cls: '', title: nameOf(ev.fromId) + ' → ' + nameOf(ev.toId),
+          sub: 'Zahlung zwischen Spielern', amount: money(ev.amount), amountCls: '' };
+      case 'adjust':
+        return { icon: 'i-pencil', cls: '', title: 'Korrektur · ' + nameOf(ev.playerId),
+          sub: 'Guthaben von Hand geändert', amount: signed(ev.amount),
+          amountCls: ev.amount < 0 ? 'neg' : 'pos' };
+      case 'settle':
+        return { icon: 'i-calc', cls: '', title: 'Abrechnung · ' + nameOf(ev.playerId),
+          sub: 'Guthaben beim Abschluss ausgeglichen', amount: signed(ev.amount), amountCls: 'zero' };
+      case 'session-end':
+        return { icon: 'i-check', cls: '', title: 'Abend abgeschlossen',
+          sub: 'Ab hier zählt eine neue Abrechnung', amount: '', amountCls: '' };
+      default:
+        return { icon: 'i-clock', cls: '', title: ev.type, sub: '', amount: '', amountCls: '' };
+    }
+  }
+
+  function renderHistory() {
+    var root = byId('view-history');
+    root.textContent = '';
+
+    if (!state.events.length) {
+      root.appendChild(emptyState('Noch nichts passiert',
+        'Sobald du Runden einträgst oder Geld ein- und auszahlst, steht hier alles nachvollziehbar drin.'));
+      return;
+    }
+
+    var events = state.events.slice().reverse();
+    var shown = events.slice(0, historyLimit);
+    var currentDay = null;
+    var card = null;
+
+    shown.forEach(function (ev) {
+      var day = dayLabel(ev.ts);
+      if (day !== currentDay) {
+        currentDay = day;
+        root.appendChild(h('div', { class: 'section-title', text: day }));
+        card = h('div', { class: 'card' });
+        root.appendChild(card);
+      }
+      var d = describe(ev);
+      var sub = h('div', { class: 'entry-sub' });
+      sub.appendChild(document.createTextNode(timeLabel(ev.ts) + ' · ' + d.sub));
+      if (d.winners) sub.appendChild(h('span', { class: 'win-name', text: d.winners }));
+      if (ev.note) sub.appendChild(document.createTextNode(' · ' + ev.note));
+
+      card.appendChild(h('div', { class: 'entry' }, [
+        h('div', { class: 'entry-icon ' + d.cls }, [icon(d.icon)]),
+        h('div', { class: 'entry-body' }, [h('div', { class: 'entry-title', text: d.title }), sub]),
+        d.amount ? h('div', { class: 'entry-amt ' + d.amountCls, text: d.amount }) : null,
+        h('button', {
+          type: 'button', class: 'entry-del', 'aria-label': 'Eintrag löschen',
+          onclick: function () {
+            confirmModal('Eintrag löschen?',
+              d.title + ' – die Guthaben werden entsprechend zurückgerechnet.',
+              'Löschen', function () {
+                removeEvent(ev.id); render(); toast('Eintrag gelöscht.');
+              });
+          }
+        }, [icon('i-trash')])
+      ]));
+    });
+
+    if (events.length > shown.length) {
+      root.appendChild(h('button', {
+        type: 'button', class: 'btn btn-block',
+        text: 'Weitere ' + Math.min(60, events.length - shown.length) + ' anzeigen',
+        onclick: function () { historyLimit += 60; renderHistory(); }
+      }));
+    }
+  }
+
+  /* ------------------------------------------------------------ 4. Kasse */
+
+  function renderCash() {
+    var root = byId('view-cash');
+    root.textContent = '';
+
+    if (!state.players.length) {
+      root.appendChild(emptyState('Keine Daten',
+        'Lege zuerst Spieler an, dann erscheint hier die Abrechnung des Abends.'));
+      return;
+    }
+
+    var stats = C.sessionStats(state);
+    var startIdx = C.sessionStartIndex(state);
+    var sessionEvents = state.events.slice(startIdx);
+    var hands = sessionEvents.filter(function (e) { return e.type === 'hand'; });
+    var volume = hands.reduce(function (s, e) {
+      return s + e.contributions.reduce(function (a, c) { return a + c.amount; }, 0);
+    }, 0);
+    var onTable = state.players.reduce(function (s, p) { return s + (stats[p.id].balance || 0); }, 0);
+
+    /* ---- Überblick ---- */
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [
+        h('h2', { text: 'Aktueller Abend' }),
+        h('span', { class: 'sub', text: hands.length + (hands.length === 1 ? ' Runde' : ' Runden') })
+      ]),
+      h('table', { class: 'tbl' }, [
+        h('thead', {}, [h('tr', {}, [
+          h('th', { text: 'Spieler' }), h('th', { text: 'Bar' }),
+          h('th', { text: 'Stand' }), h('th', { text: 'Ergebnis' })
+        ])]),
+        h('tbody', {}, state.players.slice().sort(function (a, b) {
+          return stats[b.id].net - stats[a.id].net;
+        }).map(function (p) {
+          var s = stats[p.id];
+          var cls = s.net > 0 ? 'pos' : s.net < 0 ? 'neg' : 'zero';
+          return h('tr', {}, [
+            h('td', { text: p.name }),
+            h('td', { class: 'zero', text: C.formatCents(s.in - s.out) }),
+            h('td', { text: C.formatCents(s.balance) }),
+            h('td', { class: cls, text: signed(s.net) })
+          ]);
+        }))
+      ]),
+      h('p', { class: 'hint', text: 'Bar = eingezahlt minus ausgezahlt. Stand = Guthaben in der Kasse. '
+        + 'Ergebnis = Gewinn oder Verlust an diesem Abend. Insgesamt im Spiel: ' + money(onTable)
+        + ' · Pot-Volumen: ' + money(volume) + '.' })
+    ]));
+
+    /* ---- Ausgleich ---- */
+    var nets = {};
+    state.players.forEach(function (p) { nets[p.id] = stats[p.id].net; });
+    var transfers = C.settlementTransfers(nets);
+
+    var settleCard = h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h2', { text: 'Ausgleich in bar' })])
+    ]);
+    if (!transfers.length) {
+      settleCard.appendChild(h('p', { class: 'hint', style: 'margin:0',
+        text: 'Nichts auszugleichen – alle stehen bei ±0,00 ' + state.settings.currency + '.' }));
+    } else {
+      transfers.forEach(function (t) {
+        settleCard.appendChild(h('div', { class: 'settle-line' }, [
+          h('b', { text: nameOf(t.fromId) }),
+          icon('i-arrow'),
+          h('b', { text: nameOf(t.toId) }),
+          h('span', { class: 'amt', text: money(t.amount) })
+        ]));
+      });
+      settleCard.appendChild(h('p', { class: 'hint',
+        text: 'So wenige Zahlungen wie möglich, damit am Ende alle bei null stehen.' }));
+    }
+    root.appendChild(settleCard);
+
+    /* ---- Aktionen ---- */
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h2', { text: 'Abend beenden' })]),
+      h('button', {
+        type: 'button', class: 'btn btn-block', text: 'Abend abschließen',
+        onclick: closeSession
+      }),
+      h('p', { class: 'hint', text: 'Setzt alle Guthaben auf 0 und startet eine neue Abrechnung. '
+        + 'Der Verlauf bleibt vollständig erhalten.' })
+    ]));
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h2', { text: 'Daten' })]),
+      h('div', { class: 'btn-row' }, [
+        h('button', { type: 'button', class: 'btn', text: 'Sichern', onclick: exportData }),
+        h('button', { type: 'button', class: 'btn', text: 'Laden', onclick: importData })
+      ]),
+      h('p', { class: 'hint', text: 'Die Daten liegen nur auf diesem Gerät. Sichere sie ab und zu, '
+        + 'oder übertrage sie so auf ein anderes Handy.' })
+    ]));
+  }
+
+  function closeSession() {
+    var stats = C.sessionStats(state);
+    var open = state.players.filter(function (p) { return stats[p.id].balance !== 0; });
+    confirmModal('Abend abschließen?',
+      open.length
+        ? 'Die Guthaben von ' + open.length + ' Spieler(n) werden auf 0 gesetzt. Der Verlauf bleibt erhalten.'
+        : 'Startet eine neue Abrechnung. Der Verlauf bleibt erhalten.',
+      'Abschließen', function () {
+        open.forEach(function (p) {
+          addEvent({ type: 'settle', playerId: p.id, amount: -stats[p.id].balance });
+        });
+        addEvent({ type: 'session-end' });
+        resetDraft();
+        render();
+        toast('Abend abgeschlossen. Neue Abrechnung gestartet.');
+      });
+  }
+
+  /* ================================================== Sichern und Laden */
+
+  function exportData() {
+    var json = JSON.stringify(state, null, 2);
+    var name = 'pokerkasse-' + new Date().toISOString().slice(0, 10) + '.json';
+    var url = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+
+    var body = [h('p', { class: 'hint', style: 'margin-top:0',
+      text: state.players.length + ' Spieler, ' + state.events.length + ' Einträge.' })];
+
+    var dl = h('a', { class: 'btn btn-block btn-primary', href: url, download: name,
+      style: 'margin-bottom:8px', text: 'Als Datei speichern' });
+    body.push(dl);
+
+    if (navigator.share) {
+      body.push(h('button', {
+        type: 'button', class: 'btn btn-block', text: 'Teilen', style: 'margin-bottom:8px',
+        onclick: function () {
+          var file = new File([json], name, { type: 'application/json' });
+          if (navigator.canShare && navigator.canShare({ files: [file] })) {
+            navigator.share({ files: [file], title: 'Pokerkasse-Sicherung' }).catch(function () {});
+          } else {
+            navigator.share({ title: 'Pokerkasse-Sicherung', text: json }).catch(function () {});
+          }
+        }
+      }));
+    }
+    body.push(h('button', {
+      type: 'button', class: 'btn btn-block', text: 'In die Zwischenablage',
+      onclick: function () {
+        if (navigator.clipboard) {
+          navigator.clipboard.writeText(json)
+            .then(function () { toast('Daten kopiert.'); })
+            .catch(function () { toast('Kopieren nicht möglich.'); });
+        } else { toast('Kopieren wird hier nicht unterstützt.'); }
+      }
+    }));
+
+    modal({
+      title: 'Daten sichern',
+      sub: 'Eine JSON-Datei mit allen Spielern und Einträgen.',
+      body: body, focus: false,
+      actions: [{ label: 'Fertig', run: function () { setTimeout(function () { URL.revokeObjectURL(url); }, 1000); } }]
+    });
+  }
+
+  function importData() {
+    var file = h('input', { type: 'file', accept: 'application/json,.json', class: 'input',
+      style: 'padding-top:11px;height:auto' });
+    var text = h('textarea', { class: 'input', placeholder: 'oder Daten hier einfügen …' });
+
+    function apply(raw) {
+      var parsed;
+      try { parsed = JSON.parse(raw); }
+      catch (e) { toast('Das ist keine gültige Sicherungsdatei.'); return false; }
+      var next = C.normalizeState(parsed);
+      if (!next.players.length && !next.events.length) { toast('Die Datei enthält keine Daten.'); return false; }
+      closeModal();
+      confirmModal('Daten ersetzen?',
+        next.players.length + ' Spieler und ' + next.events.length + ' Einträge werden geladen. '
+        + 'Die aktuellen Daten auf diesem Gerät gehen dabei verloren.',
+        'Ersetzen', function () {
+          state = next;
+          resetDraft();
+          save(); render();
+          toast('Daten geladen.');
+        });
+      return true;
+    }
+
+    file.addEventListener('change', function () {
+      var f = file.files && file.files[0];
+      if (!f) return;
+      var r = new FileReader();
+      r.onload = function () { apply(String(r.result)); };
+      r.readAsText(f);
+    });
+
+    modal({
+      title: 'Daten laden',
+      sub: 'Ersetzt alle Daten auf diesem Gerät durch die Sicherung.',
+      body: [
+        h('label', { class: 'field' }, [h('span', { text: 'Datei auswählen' }), file]),
+        h('label', { class: 'field' }, [h('span', { text: 'Oder Text einfügen' }), text])
+      ],
+      focus: false,
+      actions: [{ label: 'Abbrechen' }, {
+        label: 'Laden', kind: 'primary',
+        run: function () {
+          if (!text.value.trim()) { toast('Bitte Datei wählen oder Text einfügen.'); return false; }
+          apply(text.value);
+          return false;   // apply() steuert das Schließen selbst
+        }
+      }]
+    });
+  }
+
+  /* ======================================================= Einstellungen */
+
+  function settingsSheet() {
+    var cur = h('input', { class: 'input', type: 'text', value: state.settings.currency, maxlength: '4' });
+    var chips = h('input', {
+      class: 'input', type: 'text', inputmode: 'decimal',
+      value: state.settings.chips.map(function (c) { return C.formatCents(c); }).join('  ')
+    });
+
+    modal({
+      title: 'Einstellungen',
+      focus: false,
+      body: [
+        h('label', { class: 'field' }, [h('span', { text: 'Währung' }), cur]),
+        h('label', { class: 'field' }, [
+          h('span', { text: 'Chip-Werte (durch Leerzeichen getrennt)' }), chips
+        ]),
+        h('p', { class: 'hint', style: 'margin-bottom:16px',
+          text: 'Die Chip-Werte sind die Schnellwahl-Beträge beim Eintragen der Einsätze.' }),
+        h('button', {
+          type: 'button', class: 'btn btn-block', text: 'Installation auf dem Handy',
+          style: 'margin-bottom:8px', onclick: function () { closeModal(); installHelp(); }
+        }),
+        h('button', {
+          type: 'button', class: 'btn btn-block btn-danger', text: 'Alle Daten löschen',
+          onclick: function () {
+            closeModal();
+            confirmModal('Wirklich alles löschen?',
+              'Spieler, Guthaben und der gesamte Verlauf werden unwiderruflich entfernt.',
+              'Alles löschen', function () {
+                state = C.createState();
+                resetDraft();
+                save(); render();
+                toast('Alle Daten gelöscht.');
+              });
+          }
+        })
+      ],
+      actions: [{ label: 'Abbrechen' }, {
+        label: 'Speichern', kind: 'primary', run: function () {
+          var c = cur.value.trim().slice(0, 4);
+          if (c) state.settings.currency = c;
+          var parsed = chips.value.split(/[\s,;]+/)
+            .map(function (s) { return C.parseAmount(s); })
+            .filter(function (v) { return v !== null && v > 0; })
+            .sort(function (a, b) { return a - b; })
+            .slice(0, 6);
+          if (parsed.length) state.settings.chips = parsed;
+          if (state.settings.chips.indexOf(draft.chip) === -1) {
+            draft.chip = state.settings.chips[Math.min(1, state.settings.chips.length - 1)];
+            saveDraft();
+          }
+          save(); render();
+        }
+      }]
+    });
+  }
+
+  /* ========================================================= Installation */
+
+  function isStandalone() {
+    return window.matchMedia('(display-mode: standalone)').matches ||
+      window.navigator.standalone === true;
+  }
+  function isIOS() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent));
+  }
+
+  function installHelp() {
+    var steps = isIOS()
+      ? ['Diese Seite in <b>Safari</b> öffnen (nicht Chrome).',
+         'Unten auf das <b>Teilen-Symbol</b> tippen (Quadrat mit Pfeil nach oben).',
+         'Etwas nach unten scrollen und <b>„Zum Home-Bildschirm“</b> wählen.',
+         'Mit <b>„Hinzufügen“</b> bestätigen – fertig.']
+      : ['Diese Seite in <b>Chrome</b> öffnen.',
+         'Oben rechts das <b>Menü (⋮)</b> antippen.',
+         '<b>„App installieren“</b> bzw. <b>„Zum Startbildschirm zufügen“</b> wählen.',
+         'Bestätigen – die App liegt danach neben deinen anderen Apps.'];
+
+    modal({
+      title: 'Auf dem Handy installieren',
+      sub: isIOS() ? 'iPhone / iPad' : 'Android',
+      focus: false,
+      body: [h('ol', { style: 'margin:0;padding-left:20px;font-size:14.5px;line-height:1.8' },
+        steps.map(function (s) { return h('li', { html: s }); })),
+        h('p', { class: 'hint', text: 'Danach läuft die App auch ohne Internet. '
+          + 'Die Daten bleiben auf dem Gerät.' })],
+      actions: [{ label: 'Alles klar' }]
+    });
+  }
+
+  /* =============================================================== Start */
+
+  function init() {
+    state = load();
+    draft = loadDraft();
+
+    document.querySelectorAll('.tab').forEach(function (t) {
+      t.addEventListener('click', function () {
+        view = t.dataset.view;
+        historyLimit = 60;
+        hideToast();
+        render();
+      });
+    });
+    byId('btn-settings').addEventListener('click', settingsSheet);
+
+    var installBtn = byId('btn-install');
+    installBtn.addEventListener('click', function () {
+      if (deferredInstall) {
+        deferredInstall.prompt();
+        deferredInstall.userChoice.then(function () {
+          deferredInstall = null;
+          installBtn.classList.add('hidden');
+        });
+      } else { installHelp(); }
+    });
+    window.addEventListener('beforeinstallprompt', function (e) {
+      e.preventDefault();
+      deferredInstall = e;
+      installBtn.classList.remove('hidden');
+    });
+    if (!isStandalone() && isIOS()) installBtn.classList.remove('hidden');
+    window.addEventListener('appinstalled', function () {
+      deferredInstall = null;
+      installBtn.classList.add('hidden');
+      toast('Pokerkasse ist installiert.');
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !byId('modal-root').classList.contains('hidden')) closeModal();
+    });
+
+    render();
+
+    if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
+      window.addEventListener('load', function () {
+        navigator.serviceWorker.register('./sw.js').catch(function () { /* offline dann eben nicht */ });
+      });
+    }
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+}());
