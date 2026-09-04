@@ -36,10 +36,17 @@ jobs:
           # Stellt die Quelle auf "GitHub Actions", falls noch nicht geschehen.
           enablement: true
 
+      - name: Seite zusammenstellen
+        # Nur die Web-App veröffentlichen – das native Projekt gehört nicht
+        # auf die Webseite.
+        run: |
+          mkdir -p _site
+          cp -r index.html sw.js manifest.webmanifest .nojekyll css js icons _site/
+
       - name: Dateien hochladen
         uses: actions/upload-pages-artifact@v3
         with:
-          path: .
+          path: _site
 
       - name: Veröffentlichen
         id: deployment

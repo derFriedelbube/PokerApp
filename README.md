@@ -89,6 +89,24 @@ Adresse antwortet.
 
 ---
 
+## Die App gibt es in zwei Ausführungen
+
+| | Web-App (PWA) | Native App |
+| --- | --- | --- |
+| **Android** | über den Browser installierbar | fertige APK, direkt installierbar |
+| **iPhone** | über Safari installierbar | nur mit Mac + Xcode baubar |
+| Aufwand | eine Adresse öffnen | APK laden bzw. Mac nötig |
+| Updates | automatisch | neue APK installieren |
+
+Beide enthalten **dieselbe App** – identischer Code, identische Daten­haltung.
+Die Web-App ist der einfachere Weg und auf dem iPhone der einzige ohne Mac.
+Die native App ist für alle da, die lieber ein echtes Installationspaket haben.
+
+Anleitung zur Web-App: siehe unten. Anleitung zur nativen App:
+[NATIVE.md](NATIVE.md).
+
+---
+
 ## 2. Auf dem Handy installieren
 
 ### iPhone / iPad
@@ -190,7 +208,7 @@ Export.
 ## Aufbau des Projekts
 
 ```
-.github/workflows/      Veröffentlicht die App bei jedem Push auf GitHub Pages
+.github/workflows/      Veröffentlicht die Web-App auf GitHub Pages und baut die APK
 index.html              Grundgerüst und Icon-Sammlung
 css/styles.css          Gestaltung (dunkel, für Handys ausgelegt)
 js/core.js              Rechenkern: Beträge, Pot-Aufteilung, Guthaben, Abrechnung
@@ -201,6 +219,9 @@ js/app.js               Oberfläche: Ansichten, Eingaben, Speichern
 sw.js                   Service Worker – macht die App offline nutzbar
 manifest.webmanifest    Angaben für die Installation (Name, Symbole, Farben)
 icons/                  App-Symbole
+android/                natives Android-Projekt (Capacitor)
+ios/                    natives iOS-Projekt (Capacitor, Build nur auf einem Mac)
+tools/build-www.js      stellt die Web-Dateien für die native App zusammen
 tests/core.test.js      Tests des Rechenkerns
 tests/e2e.js            Test der kompletten App im Browser
 ```

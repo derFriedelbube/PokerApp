@@ -1,3 +1,14 @@
 .DS_Store
-node_modules/
 *.log
+
+# Abhängigkeiten und erzeugte Ordner
+node_modules/
+www/
+
+# Native Builds (werden aus den Quellen erzeugt, gehören nicht ins Repo)
+android/local.properties
+android/app/src/main/assets/public/
+ios/App/App/public/
+ios/App/Pods/
+*.apk
+*.aab

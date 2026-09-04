@@ -1899,6 +1899,32 @@
 
   /* ========================================================= Installation */
 
+  /** Laeuft die App als installierte native App (Capacitor) statt im Browser? */
+  function istNativeApp() {
+    return !!(window.Capacitor && window.Capacitor.isNativePlatform &&
+      window.Capacitor.isNativePlatform());
+  }
+
+  /**
+   * Die Zurueck-Taste auf Android soll nicht sofort die App schliessen:
+   * erst offene Dialoge, dann zurueck zur Spielansicht, und nur dann beenden.
+   */
+  function bindeZurueckTaste() {
+    if (!istNativeApp()) return;
+    var plugins = window.Capacitor.Plugins || {};
+    if (!plugins.App || !plugins.App.addListener) return;
+    plugins.App.addListener('backButton', function () {
+      if (!byId('modal-root').classList.contains('hidden')) { closeModal(); return; }
+      if (!byId('toast').classList.contains('hidden')) { hideToast(); return; }
+      if (view !== 'game') { view = 'game'; render(); return; }
+      if (state.hand && E.canUndo(state.hand)) {
+        toast('Zum Beenden „Hand abbrechen“ oder die App schließen.');
+        return;
+      }
+      plugins.App.exitApp();
+    });
+  }
+
   function isStandalone() {
     return window.matchMedia('(display-mode: standalone)').matches ||
       window.navigator.standalone === true;
@@ -1976,7 +2002,7 @@
       deferredInstall = e;
       installBtn.classList.remove('hidden');
     });
-    if (!isStandalone() && isIOS()) installBtn.classList.remove('hidden');
+    if (!istNativeApp() && !isStandalone() && isIOS()) installBtn.classList.remove('hidden');
     window.addEventListener('appinstalled', function () {
       deferredInstall = null;
       installBtn.classList.add('hidden');
@@ -1994,11 +2020,19 @@
 
     render();
 
+    // Der Service Worker ist nur fuer die Web-Version da. In der nativen App
+    // liegen die Dateien ohnehin auf dem Geraet, und ein Cache wuerde nach
+    // einem Update den alten Stand ausliefern.
     if ('serviceWorker' in navigator && location.protocol.indexOf('http') === 0) {
       window.addEventListener('load', function () {
+        // Erst hier pruefen: die Capacitor-Bruecke haengt sich frueh ein, aber
+        // beim load-Ereignis ist sie in jedem Fall vorhanden.
+        if (istNativeApp()) return;
         navigator.serviceWorker.register('./sw.js').catch(function () { /* offline dann eben nicht */ });
       });
     }
+
+    bindeZurueckTaste();
   }
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);

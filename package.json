@@ -1,0 +1,21 @@
+{
+  "name": "pokerkasse",
+  "version": "1.0.0",
+  "description": "Poker-Abrechnung für den Spieleabend",
+  "private": true,
+  "scripts": {
+    "test": "node tests/core.test.js && node tests/engine.test.js",
+    "www": "node tools/build-www.js",
+    "sync": "npm run www && cap sync",
+    "apk": "npm run sync && cd android && ./gradlew assembleDebug"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^7.0.0"
+  },
+  "dependencies": {
+    "@capacitor/android": "^7.0.0",
+    "@capacitor/app": "^7.1.2",
+    "@capacitor/core": "^7.0.0",
+    "@capacitor/ios": "^7.6.9"
+  }
+}

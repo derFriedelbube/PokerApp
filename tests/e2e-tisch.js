@@ -18,7 +18,14 @@ function check(cond, label, extra) {
   const page = await ctx.newPage();
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-  page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+  // Das native App-Bündel enthält absichtlich keinen Service Worker. Wird es
+  // ersatzweise im Browser geprüft, ist dessen 404 kein Fehler der App.
+  const ohneSW = process.env.BUNDLE === 'native';
+  page.on('console', m => {
+    if (m.type() !== 'error') return;
+    if (ohneSW && /fetching the script|sw\.js/.test(m.text())) return;
+    errors.push('console: ' + m.text());
+  });
 
   await page.goto(BASE, { waitUntil: 'networkidle' });
 

@@ -1,0 +1,59 @@
+# Baut die Android-App und legt die fertige APK als Download bereit.
+# Nach jedem Lauf: Actions -> den Lauf öffnen -> unter "Artifacts" die
+# Datei "pokerkasse-apk" herunterladen und auf dem Handy installieren.
+name: Android-App
+
+on:
+  push:
+    branches:
+      - claude/poker-money-tracker-app-s1l0x4
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Node einrichten
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Java einrichten
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Android-SDK einrichten
+        uses: android-actions/setup-android@v3
+
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      - name: Rechenkern und Spielablauf testen
+        run: npm test
+
+      - name: Web-Dateien für die App zusammenstellen
+        run: npm run www
+
+      - name: Nach Android übernehmen
+        run: npx cap sync android
+
+      - name: APK bauen
+        run: ./gradlew assembleDebug
+        working-directory: android
+
+      - name: APK bereitstellen
+        uses: actions/upload-artifact@v4
+        with:
+          name: pokerkasse-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

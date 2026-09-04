@@ -1,0 +1,12 @@
+{
+  "appId": "io.github.derfriedelbube.pokerkasse",
+  "appName": "Pokerkasse",
+  "webDir": "www",
+  "android": {
+    "backgroundColor": "#0b0f15"
+  },
+  "ios": {
+    "backgroundColor": "#0b0f15",
+    "contentInset": "always"
+  }
+}

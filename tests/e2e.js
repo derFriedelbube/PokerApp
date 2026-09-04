@@ -20,7 +20,14 @@ function check(cond, label, extra) {
 
   const errors = [];
   page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-  page.on('console', m => { if (m.type() === 'error') errors.push('console: ' + m.text()); });
+  // Das native App-Bündel enthält absichtlich keinen Service Worker. Wird es
+  // ersatzweise im Browser geprüft, ist dessen 404 kein Fehler der App.
+  const ohneSW = process.env.BUNDLE === 'native';
+  page.on('console', m => {
+    if (m.type() !== 'error') return;
+    if (ohneSW && /fetching the script|sw\.js/.test(m.text())) return;
+    errors.push('console: ' + m.text());
+  });
 
   await page.goto(BASE, { waitUntil: 'networkidle' });
 
@@ -216,11 +223,13 @@ function check(cond, label, extra) {
     'versehentliches Löschen lässt sich aus der Sicherung zurückholen');
   check((await balOf('Anna')).startsWith('9,95 €'), 'Guthaben aus der Sicherung korrekt');
 
-  // --- Offline ------------------------------------------------------------
-  await ctx.setOffline(true);
-  await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
-  check(await page.locator('.tabbar').isVisible(), 'App startet auch offline');
-  await ctx.setOffline(false);
+  // --- Offline (nur die Web-Version, die App braucht dafür keinen Cache) ----
+  if (!ohneSW) {
+    await ctx.setOffline(true);
+    await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});
+    check(await page.locator('.tabbar').isVisible(), 'App startet auch offline');
+    await ctx.setOffline(false);
+  }
 
   // --- Kein horizontales Scrollen auf schmalen Geräten --------------------
   await page.setViewportSize({ width: 320, height: 640 });
