@@ -13,11 +13,21 @@ App Store, ohne Anmeldung, auch **ohne Internet**.
 * **Tisch mit Sitzreihenfolge** – Spieler in der Reihenfolge an den Tisch
   setzen, in der sie sitzen. Dealer-Button, Small und Big Blind und optional
   eine Ante. Nach jeder Hand rückt der Dealer weiter.
+* **Grafischer Tisch** – die Spieler sitzen im Uhrzeigersinn um ein Oval,
+  mit Dealer-Button, Stack und den Chips, die vor ihnen liegen. Wer am Zug ist,
+  leuchtet grün; wer ausgestiegen ist, wird blass. Der Pot steht in der Mitte.
+  Die Tischgröße richtet sich nach dem Bildschirm, sodass alle Plätze ohne
+  Scrollen sichtbar bleiben – vom kleinen iPhone SE bis zu neun Spielern.
 * **Hand mitspielen** – die App führt der Reihe nach durch die Setzrunden
   (Preflop, Flop, Turn, River). Wer am Zug ist, sieht unten drei Tasten:
   *Aussteigen*, *Schieben* bzw. *Mitgehen* mit dem fälligen Betrag, und
-  *Erhöhen* mit Vorschlägen für Minimum, ½ Pot, Pot und All-in. Der Pot
-  wächst live mit, mehr als den eigenen Stack kann niemand setzen.
+  *Setzen* bzw. *Erhöhen* mit Vorschlägen für Minimum, ½ Pot, Pot und All-in.
+  Schieben wird nur angeboten, wenn es erlaubt ist. Blinds, Einsätze und
+  Mitgehen werden dem Spieler sofort abgezogen, der Pot wächst live mit.
+  Mehr als den eigenen Stack kann niemand setzen.
+* **Schritt zurück** – vertippt? Der Knopf *Zurück* nimmt die letzte Aktion
+  zurück, beliebig oft bis zum Anfang der Hand, auch über Setzrunden hinweg.
+  Einsätze, Aussteigen und All-in werden dabei sauber rückgängig gemacht.
 * **Runden eintragen** – für jeden Spieler den Einsatz eintippen (±-Tasten mit
   frei einstellbaren Chip-Werten, oder „Alle +1,00 €“ für Blinds und Antes).
   Der Pot wird laufend mitgerechnet.
@@ -162,9 +172,10 @@ Export.
    Tisch zu setzen, Blinds einstellen, **Hand starten**.
 4. Die Hand durchspielen: Für jeden Spieler die Aktion antippen, die er am
    Tisch macht. Nach jeder Setzrunde führt ein Knopf **weiter zum Flop / Turn /
-   River**. Am Ende die Gewinner antippen und **Hand abschließen** – das Geld
-   wird verrechnet. Vertippt? Direkt danach erscheint **„Rückgängig“**; später
-   lässt sich jeder Eintrag im **Verlauf** löschen.
+   River**. Verklickt? **Zurück** nimmt Schritt für Schritt zurück. Am Ende die
+   Gewinner antippen und **Hand abschließen** – das Geld wird verrechnet.
+   Danach erscheint noch einmal **„Rückgängig“**; später lässt sich jeder
+   Eintrag im **Verlauf** löschen.
 
    Solange nicht abgeschlossen ist, ändert sich kein Guthaben – eine Hand lässt
    sich jederzeit folgenlos abbrechen. Eine unterbrochene Hand übersteht auch
@@ -184,7 +195,8 @@ index.html              Grundgerüst und Icon-Sammlung
 css/styles.css          Gestaltung (dunkel, für Handys ausgelegt)
 js/core.js              Rechenkern: Beträge, Pot-Aufteilung, Guthaben, Abrechnung
 js/store.js             Speicherung: zwei Speicher, Sicherungen, Dauerhaftigkeit
-js/engine.js            Spielablauf: Blinds, Setzrunden, Haupt- und Nebenpots
+js/engine.js            Spielablauf: Blinds, Setzrunden, Haupt- und Nebenpots,
+                        Schritt-zurück-Funktion
 js/app.js               Oberfläche: Ansichten, Eingaben, Speichern
 sw.js                   Service Worker – macht die App offline nutzbar
 manifest.webmanifest    Angaben für die Installation (Name, Symbole, Farben)
@@ -205,7 +217,7 @@ node tests/engine.test.js             # Spielablauf und Pot-Aufteilung
 
 python3 -m http.server 8099 &         # App bereitstellen
 node tests/e2e.js                     # Schnelleingabe, Speicherung, Offline
-node tests/e2e-tisch.js               # komplette Hand am Tisch inkl. Nebenpot
+node tests/e2e-tisch.js               # Hand am Tisch, Nebenpot, Zurückgehen
 ```
 
 Der Browser-Test braucht Playwright (`npm i -D playwright`) und spielt einen

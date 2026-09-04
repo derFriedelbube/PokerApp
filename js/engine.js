@@ -15,6 +15,49 @@
     preflop: 'Preflop', flop: 'Flop', turn: 'Turn', river: 'River', showdown: 'Showdown'
   };
 
+  /* --------------------------------------------------- Schritt zurueck */
+
+  // Felder, die sich im Lauf einer Hand aendern. sb/bb/ante/startedAt stehen
+  // fest und muessen nicht gesichert werden.
+  var SNAP = ['street', 'dealer', 'sbSeat', 'bbSeat', 'toAct', 'minRaise', 'lastAction'];
+  var MAX_UNDO = 80;
+
+  function snapshot(hand) {
+    var o = {
+      players: hand.players.map(function (p) {
+        return {
+          id: p.id, seat: p.seat, stack: p.stack, bet: p.bet, committed: p.committed,
+          folded: p.folded, allIn: p.allIn, acted: p.acted
+        };
+      })
+    };
+    SNAP.forEach(function (f) { o[f] = hand[f]; });
+    return JSON.stringify(o);
+  }
+
+  /** Sichert den Stand vor einer Aenderung. Wird nur aufgerufen, wenn die
+      Aktion auch wirklich ausgefuehrt wird. */
+  function pushUndo(hand) {
+    if (!hand.past) hand.past = [];
+    hand.past.push(snapshot(hand));
+    if (hand.past.length > MAX_UNDO) hand.past.shift();
+  }
+
+  function canUndo(hand) {
+    return !!(hand && hand.past && hand.past.length);
+  }
+
+  /** Macht den letzten Schritt rueckgaengig (auch ueber Setzrunden hinweg). */
+  function undo(hand) {
+    if (!canUndo(hand)) return false;
+    var o;
+    try { o = JSON.parse(hand.past.pop()); } catch (e) { return false; }
+    if (!o || !Array.isArray(o.players) || o.players.length !== hand.players.length) return false;
+    hand.players = o.players;
+    SNAP.forEach(function (f) { hand[f] = o[f]; });
+    return true;
+  }
+
   /* ------------------------------------------------------------- Helfer */
 
   function seatCount(hand) { return hand.players.length; }
@@ -88,7 +131,8 @@
       }),
       toAct: -1,
       minRaise: 0,
-      lastAction: null
+      lastAction: null,
+      past: []              // Schnappschuesse fuer "zurueck"
     };
 
     var n = hand.players.length;
@@ -147,34 +191,40 @@
     if (!opt) return { ok: false, error: 'Gerade ist niemand am Zug.' };
     var p = opt.player;
     var high = maxBet(hand);
+    var target = null;
 
-    if (type === 'fold') {
-      p.folded = true;
-    } else if (type === 'check') {
+    /* ---- Erst pruefen: eine abgelehnte Aktion darf nichts veraendern und
+            auch keinen Schritt in der Zurueck-Liste erzeugen. ---- */
+    if (type === 'check') {
       if (!opt.canCheck) return { ok: false, error: 'Es steht ein Einsatz – mitgehen oder aussteigen.' };
     } else if (type === 'call') {
       if (!opt.canCall) return { ok: false, error: 'Es gibt nichts mitzugehen.' };
-      pay(p, opt.toCall);
     } else if (type === 'raise' || type === 'allin') {
-      var target = type === 'allin' ? opt.maxRaiseTo : Math.round(amount);
+      target = type === 'allin' ? opt.maxRaiseTo : Math.round(amount);
       if (type === 'raise') {
         if (!(target > high)) return { ok: false, error: 'Die Erhöhung muss über dem aktuellen Einsatz liegen.' };
-        if (target < opt.minRaiseTo) {
-          return { ok: false, error: 'Mindestens ' + opt.minRaiseTo + ' Cent.' };
-        }
+        if (target < opt.minRaiseTo) return { ok: false, error: 'Mindestens ' + opt.minRaiseTo + ' Cent.' };
         if (target > opt.maxRaiseTo) return { ok: false, error: 'Mehr als der Stack geht nicht.' };
       }
+    } else if (type !== 'fold') {
+      return { ok: false, error: 'Unbekannte Aktion.' };
+    }
+
+    pushUndo(hand);
+
+    /* ---- Jetzt ausfuehren ---- */
+    if (type === 'fold') {
+      p.folded = true;
+    } else if (type === 'call') {
+      pay(p, opt.toCall);
+    } else if (type === 'raise' || type === 'allin') {
       var erhoehungUm = target - high;
       pay(p, target - p.bet);
-      if (target > high) {
-        // Eine volle Erhoehung eroeffnet die Setzrunde neu: alle duerfen noch mal.
-        if (erhoehungUm >= hand.minRaise) {
-          hand.minRaise = erhoehungUm;
-          hand.players.forEach(function (o) { if (o !== p && canAct(o)) o.acted = false; });
-        }
+      // Eine volle Erhoehung eroeffnet die Setzrunde neu: alle duerfen noch mal.
+      if (target > high && erhoehungUm >= hand.minRaise) {
+        hand.minRaise = erhoehungUm;
+        hand.players.forEach(function (o) { if (o !== p && canAct(o)) o.acted = false; });
       }
-    } else {
-      return { ok: false, error: 'Unbekannte Aktion.' };
     }
 
     p.acted = true;
@@ -207,6 +257,7 @@
 
   /** Nächste Karte: Einsätze abschließen, neue Setzrunde eröffnen. */
   function nextStreet(hand) {
+    pushUndo(hand);
     var i = STREETS.indexOf(hand.street);
     if (i === -1 || i === STREETS.length - 1) {
       hand.street = 'showdown';
@@ -351,6 +402,8 @@
   root.noMoreBetting = noMoreBetting;
   root.nextStreet = nextStreet;
   root.toShowdown = toShowdown;
+  root.canUndo = canUndo;
+  root.undo = undo;
   root.pots = pots;
   root.refunds = refunds;
   root.potTotal = potTotal;

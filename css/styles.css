@@ -79,7 +79,7 @@ h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -.01em; }
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-y: contain;
 }
-.view { padding: var(--pad); padding-bottom: calc(var(--tabbar-h) + 28px); }
+.view { padding: var(--pad); padding-bottom: 40px; }
 
 .card {
   background: var(--surface);
@@ -275,6 +275,134 @@ h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -.01em; }
 .rest-note.ok { color: var(--green); }
 .rest-note.bad { color: var(--gold); }
 
+/* ========================================================= Grafischer Tisch */
+.ptable {
+  position: relative;
+  width: 100%;
+  height: 380px;            /* Startwert, wird in app.js dem Platz angepasst */
+  margin: 2px 0 12px;
+}
+
+/* Filz mit Rail – das Oval, um das die Sitze liegen. */
+.felt {
+  position: absolute;
+  inset: 20% 15%;
+  border-radius: 50%;
+  background:
+    radial-gradient(120% 120% at 50% 22%, #1c8a5c 0%, #10603f 46%, #0a4630 100%);
+  border: 7px solid #23303c;
+  box-shadow:
+    inset 0 0 0 2px rgba(255,255,255,.05),
+    inset 0 14px 40px rgba(0,0,0,.34),
+    0 10px 30px rgba(0,0,0,.45);
+}
+
+.felt-center {
+  position: absolute;
+  left: 50%; top: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+  pointer-events: none;
+  width: 55%;
+}
+.felt-street {
+  font-size: 10.5px; font-weight: 700; letter-spacing: .13em;
+  text-transform: uppercase; color: rgba(233,238,246,.62);
+}
+.felt-pot {
+  font-size: 27px; font-weight: 700; letter-spacing: -.02em;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+  text-shadow: 0 2px 10px rgba(0,0,0,.5);
+}
+.felt-note { font-size: 11.5px; color: rgba(233,238,246,.58); }
+
+/* Sitze auf der Ellipse – die Position kommt aus dem Winkel (siehe app.js). */
+.pseat {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 84px;
+  padding: 6px 5px 5px;
+  border-radius: 11px;
+  background: var(--surface-2);
+  border: 1.5px solid var(--line);
+  text-align: center;
+  box-shadow: 0 4px 12px rgba(0,0,0,.4);
+}
+.pseat-name {
+  font-size: 12.5px; font-weight: 650;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pseat-stack {
+  font-size: 11px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.pseat-dealer {
+  position: absolute; top: -8px; right: -8px;
+  width: 21px; height: 21px; border-radius: 50%;
+  background: var(--gold); color: #1b1206;
+  font-size: 11px; font-weight: 800;
+  display: grid; place-items: center;
+  box-shadow: 0 2px 6px rgba(0,0,0,.45);
+}
+.pseat-tag {
+  position: absolute; left: 50%; bottom: -9px;
+  transform: translateX(-50%);
+  font-size: 9.5px; font-weight: 700; letter-spacing: .04em;
+  text-transform: uppercase;
+  padding: 1px 6px; border-radius: 6px;
+  background: var(--surface-3); color: var(--muted);
+  white-space: nowrap;
+}
+.pseat.is-active {
+  border-color: var(--green);
+  background: #16281f;
+  box-shadow: 0 0 0 3px rgba(47,191,113,.24), 0 4px 14px rgba(0,0,0,.45);
+}
+.pseat.is-active .pseat-name { color: var(--green); }
+.pseat.is-folded { opacity: .38; }
+.pseat.is-allin { border-color: rgba(243,195,81,.55); }
+.pseat.is-allin .pseat-tag { background: rgba(243,195,81,.2); color: var(--gold); }
+
+/* Einsatz-Chips zwischen Spieler und Tischmitte. */
+.pbet {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  background: rgba(12,18,14,.72);
+  border: 1.5px solid rgba(243,195,81,.6);
+  color: var(--gold);
+  border-radius: 20px;
+  padding: 2px 8px;
+  font-size: 11.5px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0,0,0,.45);
+}
+
+/* Zurück-Knopf in der Aktionsleiste */
+.undo-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 30px; padding: 0 10px;
+  border-radius: 8px;
+  background: var(--surface-3);
+  color: var(--muted);
+  font-size: 12.5px; font-weight: 600;
+  flex: none;
+}
+.undo-btn svg { width: 13px; height: 13px; fill: currentColor; }
+.undo-btn:disabled { opacity: .3; }
+.undo-btn:active:not(:disabled) { color: var(--text); }
+
+.ptable.is-full .pseat { width: 71px; padding: 5px 4px 4px; }
+.ptable.is-full .pseat-name { font-size: 11.5px; }
+.ptable.is-full .pseat-stack { font-size: 10px; }
+
+@media (max-width: 350px) {
+  .pseat { width: 74px; }
+  .felt-pot { font-size: 23px; }
+}
+
 /* ============================================================ Tisch/Sitze */
 .seat, .hand-seat {
   display: flex; align-items: center; gap: 8px;
@@ -328,7 +456,7 @@ h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -.01em; }
   padding: 10px var(--pad) 12px;
   box-shadow: 0 -8px 24px rgba(0,0,0,.34);
 }
-.view.with-actionbar { padding-bottom: calc(var(--tabbar-h) + 132px); }
+.view.with-actionbar { padding-bottom: 128px; }
 
 .actionbar-head {
   display: flex; align-items: baseline; gap: 10px;

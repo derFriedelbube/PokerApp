@@ -221,6 +221,67 @@ group('Stack ist die Grenze', function () {
   eq(von(h, 'A').committed, EUR(2), 'genau der Stack ist im Pot');
 });
 
+group('Schritt zurück', function () {
+  var h = tisch(['A', 'B', 'C'], EUR(50));
+  ok(!E.canUndo(h), 'am Anfang gibt es nichts zurückzunehmen');
+
+  var vorher = E.potTotal(h);
+  E.act(h, 'raise', EUR(4));
+  ok(E.canUndo(h), 'nach einer Aktion ist ein Schritt zurück möglich');
+  eq(von(h, 'A').committed, EUR(4), 'A hat 4,00 gesetzt');
+
+  E.undo(h);
+  eq(von(h, 'A').committed, 0, 'Einsatz zurückgenommen');
+  eq(von(h, 'A').stack, EUR(50), 'Stack wiederhergestellt');
+  eq(E.potTotal(h), vorher, 'Pot wieder wie vorher');
+  eq(amZug(h), 'A', 'A ist wieder am Zug');
+  ok(!E.canUndo(h), 'Zurück-Liste ist wieder leer');
+
+  // Eine abgelehnte Aktion darf keinen Schritt erzeugen.
+  eq(E.act(h, 'check').ok, false, 'schieben gegen einen Einsatz wird abgelehnt');
+  ok(!E.canUndo(h), 'abgelehnte Aktion erzeugt keinen Zurück-Schritt');
+  eq(E.act(h, 'raise', EUR(1.2)).ok, false, 'zu kleine Erhöhung wird abgelehnt');
+  ok(!E.canUndo(h), 'auch hier kein Zurück-Schritt');
+
+  // Mehrere Schritte, auch über eine Setzrunde hinweg.
+  E.act(h, 'call'); E.act(h, 'call'); E.act(h, 'check');
+  ok(E.isStreetComplete(h), 'Preflop beendet');
+  E.nextStreet(h);
+  eq(h.street, 'flop', 'auf dem Flop');
+  E.act(h, 'raise', EUR(2));
+  eq(von(h, 'B').bet, EUR(2), 'B setzt auf dem Flop');
+
+  E.undo(h);
+  eq(von(h, 'B').bet, 0, 'Einsatz auf dem Flop zurückgenommen');
+  E.undo(h);
+  eq(h.street, 'preflop', 'zurück in die vorherige Setzrunde');
+  eq(von(h, 'A').bet, EUR(1), 'Einsätze der Vorrunde sind wieder sichtbar');
+  ok(E.isStreetComplete(h), 'die Vorrunde ist wieder im abgeschlossenen Zustand');
+
+  // Bis zum Anfang zurück.
+  var schutz = 0;
+  while (E.canUndo(h) && schutz++ < 50) E.undo(h);
+  eq(E.potTotal(h), EUR(1.5), 'ganz zurück: nur noch die Blinds im Pot');
+  eq(von(h, 'A').stack, EUR(50), 'A wieder unangetastet');
+
+  // Ein ausgestiegener Spieler kommt zurück ins Spiel.
+  var h2 = tisch(['A', 'B', 'C'], EUR(50));
+  E.act(h2, 'fold');
+  ok(von(h2, 'A').folded, 'A ist ausgestiegen');
+  E.undo(h2);
+  ok(!von(h2, 'A').folded, 'Aussteigen zurückgenommen');
+  eq(E.livePlayers(h2).length, 3, 'wieder drei im Rennen');
+
+  // All-in zurücknehmen.
+  var h3 = E.startHand({ seats: ['A', 'B'], dealer: 0, sb: EUR(0.5), bb: EUR(1),
+    stacks: { A: EUR(5), B: EUR(50) } });
+  E.act(h3, 'allin');
+  ok(von(h3, 'A').allIn, 'A ist all-in');
+  E.undo(h3);
+  ok(!von(h3, 'A').allIn, 'All-in zurückgenommen');
+  eq(von(h3, 'A').stack, EUR(4.5), 'Stack wieder mit gezahltem Blind');
+});
+
 group('Kein Cent geht verloren', function () {
   // Viele zufällige Hände: die Summe der Auszahlungen muss immer exakt
   // der Summe der Einsätze entsprechen.

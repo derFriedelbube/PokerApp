@@ -537,51 +537,10 @@
   function renderHand(root) {
     var hand = state.hand;
     var potListe = E.pots(hand);
-    var gesamt = E.potTotal(hand);
     var istShowdown = hand.street === 'showdown';
 
-    /* ---- Pot oben ---- */
-    var sub = istShowdown
-      ? (E.isHandOver(hand) ? 'Alle bis auf einen ausgestiegen' : 'Showdown – wer gewinnt?')
-      : E.STREET_NAMES[hand.street] + ' · Einsatz ' + money(E.maxBet(hand));
-    root.appendChild(h('div', { class: 'pot-dock' }, [
-      h('div', { class: 'pot' }, [
-        h('div', { class: 'pot-label', text: potListe.length > 1 ? 'Pot gesamt' : 'Pot' }),
-        h('div', { class: 'pot-amount' + (gesamt ? '' : ' is-zero'), text: money(gesamt) }),
-        h('div', { class: 'pot-sub', text: sub })
-      ])
-    ]));
-
-    /* ---- Sitze ---- */
-    var rows = h('div', { class: 'rows' });
-    hand.players.forEach(function (hp, i) {
-      var p = playerById(hp.id);
-      var dran = i === hand.toAct && !istShowdown;
-      var tags = [];
-      if (i === hand.dealer) tags.push('D');
-      if (i === hand.sbSeat && hand.sb) tags.push('SB');
-      if (i === hand.bbSeat && hand.bb) tags.push('BB');
-
-      var status = hp.folded ? 'ausgestiegen' : hp.allIn ? 'All-in' : dran ? 'ist am Zug' : '';
-      rows.appendChild(h('div', {
-        class: 'hand-seat' + (dran ? ' is-active' : '') + (hp.folded ? ' is-folded' : '')
-      }, [
-        h('div', { class: 'seat-badge' + (i === hand.dealer ? ' dealer' : ''), text: tags[0] || String(i + 1) }),
-        h('div', { class: 'who' }, [
-          h('div', { class: 'name', text: p ? p.name : 'Unbekannt' }),
-          h('div', { class: 'sub', text: 'Stack ' + money(hp.stack)
-            + (status ? ' · ' + status : '') })
-        ]),
-        hp.bet > 0 ? h('div', { class: 'bet-chip', text: money(hp.bet) }) : null
-      ]));
-    });
-    root.appendChild(h('div', { class: 'card' }, [
-      h('div', { class: 'card-head' }, [
-        h('h2', { text: 'Am Tisch' }),
-        h('span', { class: 'sub', text: E.livePlayers(hand).length + ' im Rennen' })
-      ]),
-      rows
-    ]));
+    /* ---- Der Tisch ---- */
+    root.appendChild(pokerTable(hand, istShowdown));
 
     if (istShowdown) renderShowdown(root, hand, potListe);
 
@@ -605,6 +564,91 @@
     if (!istShowdown) renderActionBar(hand);
   }
 
+  /**
+   * Zeichnet den Tisch: ein Oval mit den Sitzen ringsherum, im Uhrzeigersinn
+   * ab unten – so wie die Spieler wirklich sitzen. Positionen werden aus dem
+   * Winkel auf einer Ellipse berechnet, damit jede Spielerzahl passt.
+   */
+  function pokerTable(hand, istShowdown) {
+    var n = hand.players.length;
+    // Bei voller Besetzung wird es eng – dann kleinere Plaettchen.
+    var wrap = h('div', { class: 'ptable' + (n >= 8 ? ' is-full' : '') });
+    wrap.appendChild(h('div', { class: 'felt' }));
+
+    // In der Mitte steht der Gesamtpot – die Chips vor den Spielern sind darin
+    // enthalten. Fuer eine Kasse zaehlt die Gesamtsumme, nicht die Optik.
+    var gesamt = E.potTotal(hand);
+    var hoechster = E.maxBet(hand);
+    wrap.appendChild(h('div', { class: 'felt-center' }, [
+      h('div', { class: 'felt-street', text: istShowdown ? 'Showdown' : E.STREET_NAMES[hand.street] }),
+      h('div', { class: 'felt-pot', text: money(gesamt) }),
+      h('div', { class: 'felt-note', text: istShowdown
+        ? (E.isHandOver(hand) ? 'alle bis auf einen raus' : 'wer gewinnt?')
+        : hoechster > 0 ? 'Einsatz ' + money(hoechster) : 'Pot' })
+    ]));
+
+    hand.players.forEach(function (hp, i) {
+      var winkel = (90 + i * 360 / n) * Math.PI / 180;
+      var cos = Math.cos(winkel), sin = Math.sin(winkel);
+      var p = playerById(hp.id);
+      var dran = i === hand.toAct && !istShowdown && !E.isStreetComplete(hand);
+
+      var tag = hp.folded ? 'raus' : hp.allIn ? 'All-in' : '';
+      var seat = h('div', {
+        class: 'pseat' + (dran ? ' is-active' : '') + (hp.folded ? ' is-folded' : '')
+          + (hp.allIn ? ' is-allin' : ''),
+        style: 'left:' + (50 + 40 * cos).toFixed(2) + '%;top:' + (50 + 39 * sin).toFixed(2) + '%'
+      }, [
+        h('div', { class: 'pseat-name', text: p ? p.name : '?' }),
+        h('div', { class: 'pseat-stack', text: C.formatCents(hp.stack) }),
+        i === hand.dealer ? h('span', { class: 'pseat-dealer', text: 'D', title: 'Dealer' }) : null,
+        tag ? h('span', { class: 'pseat-tag', text: tag }) : null
+      ]);
+      wrap.appendChild(seat);
+
+      // Der Einsatz liegt zwischen Spieler und Tischmitte – wie echte Chips.
+      if (hp.bet > 0) {
+        wrap.appendChild(h('div', {
+          class: 'pbet',
+          style: 'left:' + (50 + 24 * cos).toFixed(2) + '%;top:' + (50 + 22 * sin).toFixed(2) + '%'
+        }, [C.formatCents(hp.bet)]));
+      }
+    });
+
+    passeTischHoehe(wrap);
+    return wrap;
+  }
+
+  /**
+   * Der Tisch soll ohne Scrollen sichtbar sein. Statt fester Werte wird
+   * gemessen, wie viel Platz die uebrigen Elemente lassen – das passt dann auf
+   * jedem Geraet, vom kleinen iPhone SE bis zum grossen Android.
+   */
+  function passeTischHoehe(wrap) {
+    requestAnimationFrame(function () {
+      var main = byId('main');
+      var viewEl = byId('view-game');
+      if (!main || !wrap.isConnected) return;
+      var uebrig = viewEl.scrollHeight - wrap.offsetHeight;   // alles ausser dem Tisch
+      var platz = main.clientHeight - uebrig - 4;
+      wrap.style.height = Math.max(250, Math.min(470, platz)) + 'px';
+    });
+  }
+
+  /** Nimmt den letzten Schritt zurück – auch über Setzrunden hinweg. */
+  function undoButton(klasse) {
+    var moeglich = E.canUndo(state.hand);
+    return h('button', {
+      type: 'button', class: klasse || 'undo-btn', disabled: !moeglich,
+      title: 'Letzten Schritt zurücknehmen',
+      onclick: function () {
+        if (!E.undo(state.hand)) { toast('Es gibt nichts zurückzunehmen.'); return; }
+        showdownWinners = null;
+        save(); renderGame();
+      }
+    }, [icon('i-undo'), h('span', { text: 'Zurück' })]);
+  }
+
   /* ---- Aktionsleiste am unteren Rand ---- */
 
   function renderActionBar(hand) {
@@ -618,6 +662,10 @@
     if (E.isStreetComplete(hand)) {
       var i = E.STREETS.indexOf(hand.street);
       var naechste = E.STREET_NAMES[E.STREETS[i + 1]];
+      bar.appendChild(h('div', { class: 'actionbar-head' }, [
+        h('span', { class: 'nm', text: 'Setzrunde beendet' }),
+        undoButton()
+      ]));
       bar.appendChild(h('button', {
         type: 'button', class: 'btn btn-primary btn-block btn-lg',
         text: 'Weiter zum ' + naechste,
@@ -633,7 +681,8 @@
 
     bar.appendChild(h('div', { class: 'actionbar-head' }, [
       h('span', { class: 'nm', text: name + ' ist am Zug' }),
-      h('span', { class: 'st', text: 'Stack ' + money(opt.player.stack) })
+      h('span', { class: 'st', text: 'Stack ' + money(opt.player.stack) }),
+      undoButton()
     ]));
 
     var raisePanel = h('div', { class: 'raise-panel hidden' });
@@ -660,7 +709,7 @@
         ? h('button', {
             type: 'button', class: 'act act-raise',
             onclick: function () { raisePanel.classList.toggle('hidden'); }
-          }, [h('span', { text: opt.isAllInRaise ? 'All-in' : 'Erhöhen' }),
+          }, [h('span', { text: opt.isAllInRaise ? 'All-in' : opt.canCheck ? 'Setzen' : 'Erhöhen' }),
               h('small', { text: 'ab ' + C.formatCents(opt.minRaiseTo) })])
         : h('button', { type: 'button', class: 'act', disabled: true }, [h('span', { text: 'Erhöhen' })])
     ]);
@@ -776,6 +825,11 @@
       text: offen > 0 ? 'Gewinner auswählen' : 'Hand abschließen',
       onclick: bucheHand
     }));
+    if (E.canUndo(state.hand)) {
+      root.appendChild(h('div', { class: 'center-link', style: 'margin-top:10px' }, [
+        undoButton('btn btn-sm')
+      ]));
+    }
   }
 
   function bucheHand() {
@@ -1931,6 +1985,11 @@
 
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && !byId('modal-root').classList.contains('hidden')) closeModal();
+    });
+
+    window.addEventListener('resize', function () {
+      var t = document.querySelector('.ptable');
+      if (t) passeTischHoehe(t);
     });
 
     render();

@@ -22,11 +22,11 @@ function check(cond, label, extra) {
 
   await page.goto(BASE, { waitUntil: 'networkidle' });
 
-  const pot = async () => (await page.locator('#view-game .pot-amount').textContent()).trim();
+  const pot = async () => (await page.locator('#view-game .felt-pot').textContent()).trim();
   const balOf = async (name) =>
     (await page.locator(`#view-players .row:has(.name:text-is("${name}")) .sub`).textContent()).trim();
   const amZug = async () => {
-    const el = page.locator('#view-game .hand-seat.is-active .name');
+    const el = page.locator('#view-game .pseat.is-active .pseat-name');
     return await el.count() ? (await el.textContent()).trim() : null;
   };
 
@@ -182,6 +182,75 @@ function check(cond, label, extra) {
     'war: ' + await balOf('Anna'));
   check((await balOf('Ben')).startsWith('40,50 €'), 'Ben: 50,50 -10,00 = 40,50 €',
     'war: ' + await balOf('Ben'));
+
+  // --- Grafischer Tisch ---------------------------------------------------
+  console.log('\nTisch-Darstellung');
+  await page.click('.tab[data-view="game"]');
+  await page.click('button:has-text("Hand starten")');
+  check(await page.locator('#view-game .ptable .pseat').count() === 3, 'drei Sitze am Tisch');
+  check(await page.locator('#view-game .felt').count() === 1, 'Tischfläche wird gezeichnet');
+  check(await page.locator('#view-game .pseat.is-active').count() === 1, 'genau ein Sitz ist hervorgehoben');
+  check(await page.locator('#view-game .pseat-dealer').count() === 1, 'Dealer-Button sitzt an genau einem Platz');
+  check(await page.locator('#view-game .pbet').count() === 2, 'die beiden Blinds liegen als Chips auf dem Tisch');
+
+  // Sitze müssen tatsächlich verteilt sein, nicht übereinander liegen.
+  const positionen = await page.evaluate(() => [...document.querySelectorAll('.pseat')]
+    .map(s => { const r = s.getBoundingClientRect(); return [Math.round(r.left), Math.round(r.top)]; }));
+  const verschieden = new Set(positionen.map(p => p.join(','))).size;
+  check(verschieden === 3, 'die Sitze liegen an verschiedenen Stellen', JSON.stringify(positionen));
+
+  const sichtbar = await page.evaluate(() => {
+    const main = document.getElementById('main').getBoundingClientRect();
+    return [...document.querySelectorAll('.pseat')].every(s => {
+      const r = s.getBoundingClientRect();
+      return r.top >= main.top - 1 && r.bottom <= main.bottom + 1;
+    });
+  });
+  check(sichtbar, 'alle Sitze liegen im sichtbaren Bereich');
+  check(await page.evaluate(() => {
+    const m = document.getElementById('main');
+    return m.scrollHeight <= m.clientHeight + 1;
+  }), 'der Tisch passt ohne Scrollen auf den Schirm');
+
+  // --- Zurückgehen --------------------------------------------------------
+  console.log('\nZurückgehen');
+  check(await page.locator('.undo-btn').isDisabled(), 'am Anfang ist Zurück gesperrt');
+  const potVorher = await pot();
+  const dranVorher = await amZug();
+  await page.click('.act-fold');
+  check(await amZug() !== dranVorher, 'nach dem Aussteigen ist jemand anders dran');
+  check(await page.locator('#view-game .pseat.is-folded').count() === 1, 'der Sitz ist als ausgestiegen markiert');
+
+  check(!(await page.locator('.undo-btn').isDisabled()), 'Zurück ist jetzt möglich');
+  await page.click('.undo-btn');
+  check(await amZug() === dranVorher, 'wieder derselbe Spieler am Zug', 'war: ' + await amZug());
+  check(await page.locator('#view-game .pseat.is-folded').count() === 0, 'Aussteigen wurde zurückgenommen');
+  check(await pot() === potVorher, 'Pot unverändert');
+  check(await page.locator('.undo-btn').isDisabled(), 'Zurück wieder gesperrt');
+
+  // Mehrere Schritte, auch über eine Setzrunde hinweg.
+  await page.click('.act-raise');
+  await page.fill('.raise-panel input', '5');
+  await page.click('.raise-panel button:has-text("Setzen")');
+  await page.click('.act-call'); await page.click('.act-call');
+  check((await page.locator('#actionbar .btn-primary').textContent()).includes('Flop'), 'Preflop beendet');
+  await page.click('#actionbar .btn-primary');
+  const potFlop = await pot();
+  await page.click('.act-call');                     // schieben
+  await page.click('.undo-btn');                     // zurück
+  await page.click('.undo-btn');                     // zurück in die Vorrunde
+  check((await page.locator('#actionbar .btn-primary').textContent()).includes('Flop'),
+    'zurück in die abgeschlossene Preflop-Runde');
+  check(await pot() === potFlop, 'Pot dabei unverändert');
+  await page.screenshot({ path: SHOTS + '/14-zurueck.png' });
+
+  // Ganz zurück an den Anfang der Hand.
+  let schutz = 0;
+  while (!(await page.locator('.undo-btn').isDisabled()) && schutz++ < 20) await page.click('.undo-btn');
+  check(await pot() === potVorher, 'ganz zurück: nur noch die Blinds im Pot', 'war: ' + await pot());
+
+  await page.click('a:has-text("x"), .link.danger');
+  await page.click('.modal-actions button:has-text("Abbrechen")');
 
   check(errors.length === 0, 'keine Fehler in der Browser-Konsole', errors.join('\n       '));
   await browser.close();
