@@ -1,0 +1,46 @@
+# Veröffentlicht die App auf GitHub Pages.
+# Läuft bei jedem Push automatisch – die statischen Dateien werden unverändert
+# übernommen, es gibt keinen Build-Schritt.
+name: GitHub Pages
+
+on:
+  push:
+    branches:
+      - claude/poker-money-tracker-app-s1l0x4
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Läuft ein Deployment bereits, wird es nicht abgebrochen, sondern abgewartet.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Pages einrichten
+        uses: actions/configure-pages@v5
+        with:
+          # Stellt die Quelle auf "GitHub Actions", falls noch nicht geschehen.
+          enablement: true
+
+      - name: Dateien hochladen
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - name: Veröffentlichen
+        id: deployment
+        uses: actions/deploy-pages@v4
