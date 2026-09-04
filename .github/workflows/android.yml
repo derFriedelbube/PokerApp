@@ -8,8 +8,6 @@ on:
     branches:
       - claude/poker-money-tracker-app-s1l0x4
       - main
-    tags:
-      - 'v*'
   workflow_dispatch:
 
 # Zum Anlegen eines Release (der Download-Link) wird Schreibrecht gebraucht.
@@ -64,21 +62,34 @@ jobs:
       # Bei einem Versions-Tag zusätzlich als Release veröffentlichen. Das ergibt
       # einen ganz normalen Download-Link, den jedes Handy direkt öffnen kann:
       # https://github.com/<benutzer>/PokerApp/releases/latest/download/pokerkasse.apk
+      # Die fertige APK als Release bereitstellen. Das ergibt einen dauerhaften,
+      # direkten Download-Link, den jedes Handy im Browser öffnen kann – ohne
+      # Anmeldung und ohne Entpacken:
+      #   https://github.com/<benutzer>/PokerApp/releases/latest/download/pokerkasse.apk
+      # Es gibt immer genau ein Release; es wird bei jedem Build ersetzt.
       - name: Als Release veröffentlichen
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.ref_name == 'main' || startsWith(github.ref_name, 'claude/')
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
         run: |
           cp android/app/build/outputs/apk/debug/app-debug.apk pokerkasse.apk
           printf '%s\n' \
-            'Android-App zum Installieren.' \
+            'Die Pokerkasse als Android-App.' \
             '' \
-            "**Direkter Download:** https://github.com/$REPO/releases/latest/download/pokerkasse.apk" \
+            "**Download:** https://github.com/$REPO/releases/latest/download/pokerkasse.apk" \
             '' \
-            'Auf dem Handy öffnen, bei der Rückfrage *Unbekannte Apps installieren* erlauben, dann *Installieren*. Ab Android 6.' \
+            'Die Datei auf dem Handy öffnen. Android fragt einmalig nach der Erlaubnis' \
+            '*Unbekannte Apps installieren* – erlauben, dann auf *Installieren* tippen.' \
+            'Voraussetzung: Android 6 oder neuer.' \
             '' \
-            'Die Web-App läuft weiterhin unter https://derfriedelbube.github.io/PokerApp/ – auch auf dem iPhone.' \
+            "Stand: Commit $GITHUB_SHA" \
+            '' \
+            'Auf dem iPhone gibt es die App als Web-App:' \
+            'https://derfriedelbube.github.io/PokerApp/ (in Safari öffnen, Teilen, Zum Home-Bildschirm).' \
             > notes.md
-          gh release create "$GITHUB_REF_NAME" pokerkasse.apk \
-            --title "Pokerkasse $GITHUB_REF_NAME" --notes-file notes.md
+          # Vorheriges Release samt Tag entfernen, damit immer genau eines
+          # existiert und "latest" auf den aktuellen Stand zeigt.
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest pokerkasse.apk \
+            --title "Pokerkasse für Android" --notes-file notes.md
