@@ -24,6 +24,17 @@ function check(cond, label, extra) {
 
   await page.goto(BASE, { waitUntil: 'networkidle' });
 
+  // Der Spiel-Tab zeigt jetzt standardmäßig den Tisch; diese Suite prüft die
+  // Schnelleingabe. Der gewählte Modus wird gespeichert.
+  const zurSchnelleingabe = async () => {
+    await page.click('.tab[data-view="game"]');
+    const btn = page.locator('#view-game .segmented button:has-text("Schnelleingabe")');
+    if (await btn.count()) {
+      const cls = (await btn.getAttribute('class')) || '';
+      if (!cls.includes('is-on')) await btn.click();
+    }
+  };
+
   // --- Startzustand -------------------------------------------------------
   console.log('\nStart');
   check(await page.locator('text=Willkommen bei der Pokerkasse').isVisible(), 'Begrüßung für leere App');
@@ -46,7 +57,7 @@ function check(cond, label, extra) {
 
   // --- Runde 1: ein Gewinner ---------------------------------------------
   console.log('\nRunde 1 – ein Gewinner');
-  await page.click('.tab[data-view="game"]');
+  await zurSchnelleingabe();
   const bets = page.locator('#view-game .bet-input');
   check(await bets.count() === 3, 'drei Einsatzzeilen');
 
@@ -71,7 +82,7 @@ function check(cond, label, extra) {
 
   // --- Runde 2: Split Pot mit Rest-Cent -----------------------------------
   console.log('\nRunde 2 – Split Pot');
-  await page.click('.tab[data-view="game"]');
+  await zurSchnelleingabe();
   for (let i = 0; i < 3; i++) await page.locator('#view-game .bet-input').nth(i).fill('0,05');
   check((await page.locator('.pot-amount').textContent()).trim() === '0,15 €', 'Pot 0,15 €');
 
@@ -89,7 +100,7 @@ function check(cond, label, extra) {
 
   // --- Manuelle Aufteilung (Side Pot) -------------------------------------
   console.log('\nRunde 3 – manuelle Aufteilung');
-  await page.click('.tab[data-view="game"]');
+  await zurSchnelleingabe();
   for (let i = 0; i < 3; i++) await page.locator('#view-game .bet-input').nth(i).fill('10');
   await page.click('#view-game .pill:has-text("Anna")');
   await page.click('#view-game .pill:has-text("Ben")');
@@ -213,9 +224,14 @@ function check(cond, label, extra) {
 
   // --- Kein horizontales Scrollen auf schmalen Geräten --------------------
   await page.setViewportSize({ width: 320, height: 640 });
-  await page.click('.tab[data-view="game"]');
-  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-  check(overflow <= 0, 'kein seitliches Scrollen bei 320 px Breite', 'Überstand: ' + overflow + 'px');
+  const ueberstand = () => page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+  await zurSchnelleingabe();
+  let over = await ueberstand();
+  check(over <= 0, 'Schnelleingabe: kein seitliches Scrollen bei 320 px', 'Überstand: ' + over + 'px');
+  await page.click('#view-game .segmented button:has-text("Tisch")');
+  over = await ueberstand();
+  check(over <= 0, 'Tisch: kein seitliches Scrollen bei 320 px', 'Überstand: ' + over + 'px');
 
   check(errors.length === 0, 'keine Fehler in der Browser-Konsole', errors.join('\n       '));
 

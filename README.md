@@ -10,16 +10,28 @@ App Store, ohne Anmeldung, auch **ohne Internet**.
 
 * **Spieler mit Guthaben** – Namen anlegen, Geld einzahlen und auszahlen.
   Das Guthaben bleibt über Abende hinweg gespeichert.
+* **Tisch mit Sitzreihenfolge** – Spieler in der Reihenfolge an den Tisch
+  setzen, in der sie sitzen. Dealer-Button, Small und Big Blind und optional
+  eine Ante. Nach jeder Hand rückt der Dealer weiter.
+* **Hand mitspielen** – die App führt der Reihe nach durch die Setzrunden
+  (Preflop, Flop, Turn, River). Wer am Zug ist, sieht unten drei Tasten:
+  *Aussteigen*, *Schieben* bzw. *Mitgehen* mit dem fälligen Betrag, und
+  *Erhöhen* mit Vorschlägen für Minimum, ½ Pot, Pot und All-in. Der Pot
+  wächst live mit, mehr als den eigenen Stack kann niemand setzen.
 * **Runden eintragen** – für jeden Spieler den Einsatz eintippen (±-Tasten mit
   frei einstellbaren Chip-Werten, oder „Alle +1,00 €“ für Blinds und Antes).
   Der Pot wird laufend mitgerechnet.
 * **Gewinner antippen** – das Geld wird automatisch abgezogen und gutgeschrieben.
-* **Split Pot** – mehrere Gewinner antippen, der Pot wird gleichmäßig geteilt.
-  Ein nicht teilbarer Rest-Cent geht wie am Tisch an den zuerst gewählten
-  Spieler und wird sichtbar gekennzeichnet.
-* **Manuelle Aufteilung** – für Side-Pots (All-in) lässt sich jeder Anteil
-  einzeln eintragen. Die Runde lässt sich erst abschließen, wenn der Pot
-  genau aufgeht.
+* **Split Pot** – am Ende einfach mehrere Gewinner antippen, der Pot wird
+  gleichmäßig geteilt. Ein nicht teilbarer Rest-Cent geht wie am Tisch an den
+  zuerst gewählten Spieler und wird sichtbar gekennzeichnet.
+* **Nebenpots rechnet die App selbst** – geht jemand mit weniger All-in,
+  entstehen automatisch Haupt- und Nebenpot. Für jeden Pot lassen sich die
+  Gewinner getrennt wählen, und wer nicht mitbezahlt hat, steht dort gar nicht
+  erst zur Auswahl. Einsätze, die am Ende niemand mehr gewinnen kann, gehen an
+  die Einzahler zurück.
+* **Schnelleingabe** – wer eine Hand ohne die App gespielt hat, trägt die
+  Beträge weiterhin direkt ein (Umschalter oben in der Spiel-Ansicht).
 * **Verlauf** – jede Runde und jede Zahlung ist nachvollziehbar und einzeln
   löschbar. Die Guthaben werden dabei korrekt zurückgerechnet.
 * **Kasse** – Gewinn/Verlust je Spieler und ein Vorschlag, wer wem am Ende
@@ -146,12 +158,20 @@ Export.
    Schalter auf „sitzt aus“ gestellt.
 2. Optional: auf einen Namen tippen → **Geld einzahlen**, wenn jemand Bargeld
    in die Kasse legt.
-3. **Spiel** → Einsätze eintragen, Gewinner antippen, **Runde abschließen**.
-   Vertippt? Direkt danach erscheint unten **„Rückgängig“**; später lässt sich
-   jeder Eintrag im **Verlauf** löschen.
-4. **Kasse** → am Ende des Abends zeigt die Tabelle Gewinn und Verlust, darunter
+3. **Spiel → Tisch** → die Namen antippen, um sie in Sitzreihenfolge an den
+   Tisch zu setzen, Blinds einstellen, **Hand starten**.
+4. Die Hand durchspielen: Für jeden Spieler die Aktion antippen, die er am
+   Tisch macht. Nach jeder Setzrunde führt ein Knopf **weiter zum Flop / Turn /
+   River**. Am Ende die Gewinner antippen und **Hand abschließen** – das Geld
+   wird verrechnet. Vertippt? Direkt danach erscheint **„Rückgängig“**; später
+   lässt sich jeder Eintrag im **Verlauf** löschen.
+
+   Solange nicht abgeschlossen ist, ändert sich kein Guthaben – eine Hand lässt
+   sich jederzeit folgenlos abbrechen. Eine unterbrochene Hand übersteht auch
+   das Schließen der App.
+5. **Kasse** → am Ende des Abends zeigt die Tabelle Gewinn und Verlust, darunter
    steht, wer wem wie viel bar geben muss.
-5. Mit **„Abend abschließen“** werden alle Guthaben auf 0 gesetzt und eine neue
+6. Mit **„Abend abschließen“** werden alle Guthaben auf 0 gesetzt und eine neue
    Abrechnung beginnt. Der Verlauf bleibt erhalten.
 
 ---
@@ -164,6 +184,7 @@ index.html              Grundgerüst und Icon-Sammlung
 css/styles.css          Gestaltung (dunkel, für Handys ausgelegt)
 js/core.js              Rechenkern: Beträge, Pot-Aufteilung, Guthaben, Abrechnung
 js/store.js             Speicherung: zwei Speicher, Sicherungen, Dauerhaftigkeit
+js/engine.js            Spielablauf: Blinds, Setzrunden, Haupt- und Nebenpots
 js/app.js               Oberfläche: Ansichten, Eingaben, Speichern
 sw.js                   Service Worker – macht die App offline nutzbar
 manifest.webmanifest    Angaben für die Installation (Name, Symbole, Farben)
@@ -180,9 +201,11 @@ man jeden Eintrag im Verlauf löschen, ohne dass die Beträge auseinanderlaufen.
 
 ```bash
 node tests/core.test.js               # Rechenkern
+node tests/engine.test.js             # Spielablauf und Pot-Aufteilung
 
 python3 -m http.server 8099 &         # App bereitstellen
-node tests/e2e.js                     # kompletter Durchlauf im Browser
+node tests/e2e.js                     # Schnelleingabe, Speicherung, Offline
+node tests/e2e-tisch.js               # komplette Hand am Tisch inkl. Nebenpot
 ```
 
 Der Browser-Test braucht Playwright (`npm i -D playwright`) und spielt einen
@@ -191,7 +214,9 @@ Rest-Cent-Verteilung, Side-Pot, Einzahlung, Löschen im Verlauf, Abrechnung,
 Neustart und Offline-Betrieb. Dazu die Speicherung: dass die Daten in beiden
 Speichern ankommen, dass ein geleerter Speicher aus dem anderen wieder
 aufgefüllt wird und dass sich ein versehentliches Löschen aus der Sicherung
-zurückholen lässt.
+zurückholen lässt. Der Test des Spielablaufs spielt unter anderem 400 zufällige
+Hände durch und prüft dabei, dass die Summe der Einsätze immer exakt der Summe
+aus Pots und Rückgaben entspricht – kein Cent darf entstehen oder verschwinden.
 
 ## Änderungen an der App
 

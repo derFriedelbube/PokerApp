@@ -99,6 +99,10 @@
       schema: SCHEMA,
       players: [],
       events: [],
+      // Sitzordnung, Dealer-Position und Blinds des Tisches
+      table: { seats: [], dealer: 0, sb: 50, bb: 100, ante: 0 },
+      // Laufende Hand – wird mitgespeichert, damit ein Neustart sie nicht verliert
+      hand: null,
       settings: { currency: '€', chips: [50, 100, 200, 500, 1000] }
     };
   }
@@ -279,6 +283,61 @@
           return null;
       }
     }).filter(Boolean);
+
+    /* ---- Tisch ---- */
+    var t = raw.table || {};
+    var gesehen = {};
+    base.table = {
+      seats: (Array.isArray(t.seats) ? t.seats : []).filter(function (id) {
+        if (!known[id] || gesehen[id]) return false;
+        gesehen[id] = true;
+        return true;
+      }),
+      dealer: Math.max(0, int(t.dealer) || 0),
+      sb: Math.max(0, int(t.sb) === null ? 50 : int(t.sb)),
+      bb: Math.max(0, int(t.bb) === null ? 100 : int(t.bb)),
+      ante: Math.max(0, int(t.ante) || 0)
+    };
+    if (base.table.dealer >= base.table.seats.length) base.table.dealer = 0;
+
+    /* ---- Laufende Hand ----
+       Nur uebernehmen, wenn sie vollstaendig und stimmig ist. Eine halb
+       gelesene Hand waere schlimmer als gar keine – dann lieber neu anfangen. */
+    var rh = raw.hand;
+    if (rh && typeof rh === 'object' && Array.isArray(rh.players) && rh.players.length >= 2) {
+      var heil = true;
+      var hp = rh.players.map(function (p) {
+        if (!p || !known[p.id] || int(p.committed) === null || int(p.stack) === null) { heil = false; return null; }
+        return {
+          id: p.id,
+          seat: int(p.seat) || 0,
+          stack: Math.max(0, int(p.stack)),
+          bet: Math.max(0, int(p.bet) || 0),
+          committed: Math.max(0, int(p.committed)),
+          folded: !!p.folded,
+          allIn: !!p.allIn,
+          acted: !!p.acted
+        };
+      });
+      if (heil) {
+        base.hand = {
+          street: ['preflop', 'flop', 'turn', 'river', 'showdown'].indexOf(rh.street) !== -1
+            ? rh.street : 'preflop',
+          dealer: int(rh.dealer) || 0,
+          sb: Math.max(0, int(rh.sb) || 0),
+          bb: Math.max(0, int(rh.bb) || 0),
+          ante: Math.max(0, int(rh.ante) || 0),
+          sbSeat: int(rh.sbSeat) || 0,
+          bbSeat: int(rh.bbSeat) || 0,
+          startedAt: Number(rh.startedAt) || Date.now(),
+          players: hp,
+          toAct: rh.toAct === undefined ? -1 : int(rh.toAct),
+          minRaise: Math.max(1, int(rh.minRaise) || 1),
+          lastAction: rh.lastAction || null
+        };
+        if (base.hand.toAct >= hp.length) base.hand.toAct = -1;
+      }
+    }
 
     var s = raw.settings || {};
     base.settings.currency = String(s.currency || '€').slice(0, 4) || '€';

@@ -8,6 +8,8 @@
 
   var C = window.PokerCore;
   var S = window.PokerStore;
+  var E = window.PokerEngine;
+  var MODE_KEY = 'pokerkasse.mode';
   var DRAFT_KEY = 'pokerkasse.draft.v1';
   var SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -17,6 +19,7 @@
   var storageWarned = false;
   var deferredInstall = null;
   var toastTimer = null;
+  var gameMode = 'table';   // 'table' = Spielablauf, 'quick' = Beträge eintippen
 
   /* =============================================================== Helfer */
 
@@ -251,6 +254,11 @@
   /* ============================================================ Ansichten */
 
   function render() {
+    var bar = document.getElementById('actionbar');
+    if (bar && !(view === 'game' && state.hand && state.hand.street !== 'showdown')) {
+      bar.remove();
+      byId('view-game').classList.remove('with-actionbar');
+    }
     ['game', 'players', 'history', 'cash'].forEach(function (v) {
       byId('view-' + v).classList.toggle('hidden', v !== view);
     });
@@ -310,18 +318,504 @@
     return { ok: true };
   }
 
+  /** Weiche: laufende Hand, Tisch-Aufbau oder Schnelleingabe. */
   function renderGame() {
     var root = byId('view-game');
     root.textContent = '';
+    // Die Leiste haengt am body, nicht an der Ansicht – sie muss bei jedem
+    // Neuaufbau weg und wird nur neu gesetzt, wenn jemand am Zug ist.
+    var bar = document.getElementById('actionbar');
+    if (bar) bar.remove();
+    root.classList.remove('with-actionbar');
 
     if (!state.players.length) {
       root.appendChild(emptyState(
         'Willkommen bei der Pokerkasse',
-        'Lege zuerst deine Mitspieler an. Danach trägst du hier jede Runde ein: wer wie viel in den Pot legt und wer gewinnt.',
+        'Lege zuerst deine Mitspieler an. Danach setzt du sie an den Tisch und spielst die Runden hier mit.',
         'Spieler anlegen', function () { view = 'players'; render(); }));
       return;
     }
 
+    if (state.hand) { renderHand(root); return; }
+
+    root.appendChild(h('div', { class: 'segmented', style: 'margin:0 0 14px' }, [
+      h('button', {
+        type: 'button', class: gameMode === 'table' ? 'is-on' : '', text: 'Tisch',
+        onclick: function () { setMode('table'); }
+      }),
+      h('button', {
+        type: 'button', class: gameMode === 'quick' ? 'is-on' : '', text: 'Schnelleingabe',
+        onclick: function () { setMode('quick'); }
+      })
+    ]));
+
+    if (gameMode === 'table') renderTableSetup(root);
+    else renderQuick(root);
+  }
+
+  function setMode(m) {
+    gameMode = m;
+    try { localStorage.setItem(MODE_KEY, m); } catch (e) { /* egal */ }
+    renderGame();
+  }
+
+
+  /* ================================================= Tisch und Spielablauf */
+
+  var showdownWinners = null;   // Auswahl je Pot, nur waehrend des Showdowns
+
+  function seatedPlayers() {
+    return state.table.seats.map(playerById).filter(Boolean);
+  }
+
+  /** Guthaben als Startstack der Hand. */
+  function handStacks() {
+    return C.computeBalances(state);
+  }
+
+  function saveTable() { save(); renderGame(); }
+
+  /* ------------------------------------------------------- Tisch aufbauen */
+
+  function renderTableSetup(root) {
+    var balances = C.computeBalances(state);
+    var seats = seatedPlayers();
+    var t = state.table;
+
+    /* ---- Sitzordnung ---- */
+    var list = h('div', { class: 'rows' });
+    seats.forEach(function (p, i) {
+      var rolle = seats.length === 2
+        ? (i === t.dealer ? 'D/SB' : 'BB')
+        : (i === t.dealer ? 'D' : i === (t.dealer + 1) % seats.length ? 'SB'
+          : i === (t.dealer + 2) % seats.length ? 'BB' : String(i + 1));
+      var bal = balances[p.id] || 0;
+
+      list.appendChild(h('div', { class: 'seat' }, [
+        h('div', {
+          class: 'seat-badge' + (i === t.dealer ? ' dealer' : ''), text: rolle,
+          title: i === t.dealer ? 'Dealer' : 'Sitz ' + (i + 1)
+        }),
+        h('div', { class: 'who' }, [
+          h('div', { class: 'name', text: p.name }),
+          h('div', { class: 'sub' + (bal <= 0 ? ' is-neg' : ''), text: money(bal) })
+        ]),
+        h('button', {
+          type: 'button', class: 'step', 'aria-label': 'nach oben', disabled: i === 0,
+          onclick: function () { tauscheSitze(i, i - 1); }
+        }, [h('span', { text: '↑' })]),
+        h('button', {
+          type: 'button', class: 'step', 'aria-label': 'nach unten', disabled: i === seats.length - 1,
+          onclick: function () { tauscheSitze(i, i + 1); }
+        }, [h('span', { text: '↓' })]),
+        h('button', {
+          type: 'button', class: 'step', 'aria-label': 'vom Tisch nehmen',
+          onclick: function () {
+            t.seats.splice(i, 1);
+            if (t.dealer >= t.seats.length) t.dealer = 0;
+            saveTable();
+          }
+        }, [icon('i-close')])
+      ]));
+    });
+
+    function tauscheSitze(a, b) {
+      var tmp = t.seats[a]; t.seats[a] = t.seats[b]; t.seats[b] = tmp;
+      if (t.dealer === a) t.dealer = b; else if (t.dealer === b) t.dealer = a;
+      saveTable();
+    }
+
+    /* ---- Wer kann noch dazu ---- */
+    var frei = state.players.filter(function (p) { return t.seats.indexOf(p.id) === -1; });
+    var addPills = h('div', { class: 'pills' }, frei.map(function (p) {
+      return h('button', {
+        type: 'button', class: 'pill',
+        onclick: function () { t.seats.push(p.id); saveTable(); }
+      }, [icon('i-plus'), p.name]);
+    }));
+
+    var card = h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [
+        h('h2', { text: 'Tisch' }),
+        h('span', { class: 'sub', text: seats.length + (seats.length === 1 ? ' Spieler' : ' Spieler') })
+      ])
+    ]);
+    if (seats.length) {
+      card.appendChild(list);
+      card.appendChild(h('button', {
+        type: 'button', class: 'btn btn-sm', style: 'margin-top:10px',
+        text: 'Dealer weiterrücken',
+        onclick: function () { t.dealer = (t.dealer + 1) % seats.length; saveTable(); }
+      }));
+    } else {
+      card.appendChild(h('p', { class: 'hint', style: 'margin-top:0',
+        text: 'Tippe unten auf die Namen, um die Spieler in Sitzreihenfolge an den Tisch zu setzen.' }));
+    }
+    if (frei.length) {
+      card.appendChild(h('div', { class: 'section-title', text: 'Dazusetzen' }));
+      card.appendChild(addPills);
+    }
+    root.appendChild(card);
+
+    /* ---- Blinds ---- */
+    function betragFeld(label, key, hinweis) {
+      var inp = h('input', {
+        class: 'input', type: 'text', inputmode: 'decimal',
+        value: t[key] ? C.formatCents(t[key]) : '0,00',
+        onfocus: function () { inp.select(); },
+        onblur: function () {
+          var c = C.parseAmount(inp.value);
+          t[key] = c === null ? 0 : Math.max(0, c);
+          inp.value = C.formatCents(t[key]);
+          save();
+        }
+      });
+      return h('label', { class: 'field' }, [
+        h('span', { text: label }), inp,
+        hinweis ? h('div', { class: 'hint', style: 'margin-top:4px', text: hinweis }) : null
+      ]);
+    }
+
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [h('h2', { text: 'Blinds' })]),
+      h('div', { class: 'field-row' }, [
+        betragFeld('Small Blind', 'sb'),
+        betragFeld('Big Blind', 'bb')
+      ]),
+      betragFeld('Ante (optional)', 'ante', 'Zahlt jeder vor der Hand. 0 = keine Ante.')
+    ]));
+
+    /* ---- Start ---- */
+    var problem = seats.length < 2 ? 'Mindestens zwei Spieler an den Tisch setzen.'
+      : seats.filter(function (p) { return (balances[p.id] || 0) <= 0; }).length
+        ? 'Alle am Tisch brauchen Guthaben – unter „Spieler“ Geld einzahlen.'
+        : null;
+
+    root.appendChild(h('button', {
+      type: 'button', class: 'btn btn-primary btn-block btn-lg', disabled: !!problem,
+      text: 'Hand starten', onclick: starteHand
+    }));
+    if (problem) root.appendChild(h('p', { class: 'hint', style: 'text-align:center', text: problem }));
+  }
+
+  function starteHand() {
+    var balances = handStacks();
+    var hand = E.startHand({
+      seats: state.table.seats.slice(),
+      dealer: state.table.dealer,
+      sb: state.table.sb, bb: state.table.bb, ante: state.table.ante,
+      stacks: balances
+    });
+    if (!hand) { toast('Mindestens zwei Spieler nötig.'); return; }
+    state.hand = hand;
+    showdownWinners = null;
+    handStep();
+    save();
+    renderGame();
+  }
+
+  /** Bringt die Hand nach jeder Aktion in den nächsten sinnvollen Zustand. */
+  function handStep() {
+    var hand = state.hand;
+    if (!hand || hand.street === 'showdown') return;
+    if (E.isHandOver(hand)) { E.toShowdown(hand); return; }
+    if (!E.isStreetComplete(hand)) return;
+    // Kann niemand mehr setzen, ist der Rest der Hand nur noch Kartenglück.
+    if (hand.street === 'river' || E.noMoreBetting(hand)) E.toShowdown(hand);
+  }
+
+  function tuAktion(type, amount) {
+    var res = E.act(state.hand, type, amount);
+    if (!res.ok) { toast(res.error); return; }
+    handStep();
+    save();
+    renderGame();
+  }
+
+  /* ------------------------------------------------------- Laufende Hand */
+
+  function renderHand(root) {
+    var hand = state.hand;
+    var potListe = E.pots(hand);
+    var gesamt = E.potTotal(hand);
+    var istShowdown = hand.street === 'showdown';
+
+    /* ---- Pot oben ---- */
+    var sub = istShowdown
+      ? (E.isHandOver(hand) ? 'Alle bis auf einen ausgestiegen' : 'Showdown – wer gewinnt?')
+      : E.STREET_NAMES[hand.street] + ' · Einsatz ' + money(E.maxBet(hand));
+    root.appendChild(h('div', { class: 'pot-dock' }, [
+      h('div', { class: 'pot' }, [
+        h('div', { class: 'pot-label', text: potListe.length > 1 ? 'Pot gesamt' : 'Pot' }),
+        h('div', { class: 'pot-amount' + (gesamt ? '' : ' is-zero'), text: money(gesamt) }),
+        h('div', { class: 'pot-sub', text: sub })
+      ])
+    ]));
+
+    /* ---- Sitze ---- */
+    var rows = h('div', { class: 'rows' });
+    hand.players.forEach(function (hp, i) {
+      var p = playerById(hp.id);
+      var dran = i === hand.toAct && !istShowdown;
+      var tags = [];
+      if (i === hand.dealer) tags.push('D');
+      if (i === hand.sbSeat && hand.sb) tags.push('SB');
+      if (i === hand.bbSeat && hand.bb) tags.push('BB');
+
+      var status = hp.folded ? 'ausgestiegen' : hp.allIn ? 'All-in' : dran ? 'ist am Zug' : '';
+      rows.appendChild(h('div', {
+        class: 'hand-seat' + (dran ? ' is-active' : '') + (hp.folded ? ' is-folded' : '')
+      }, [
+        h('div', { class: 'seat-badge' + (i === hand.dealer ? ' dealer' : ''), text: tags[0] || String(i + 1) }),
+        h('div', { class: 'who' }, [
+          h('div', { class: 'name', text: p ? p.name : 'Unbekannt' }),
+          h('div', { class: 'sub', text: 'Stack ' + money(hp.stack)
+            + (status ? ' · ' + status : '') })
+        ]),
+        hp.bet > 0 ? h('div', { class: 'bet-chip', text: money(hp.bet) }) : null
+      ]));
+    });
+    root.appendChild(h('div', { class: 'card' }, [
+      h('div', { class: 'card-head' }, [
+        h('h2', { text: 'Am Tisch' }),
+        h('span', { class: 'sub', text: E.livePlayers(hand).length + ' im Rennen' })
+      ]),
+      rows
+    ]));
+
+    if (istShowdown) renderShowdown(root, hand, potListe);
+
+    // Bewusst zurückhaltend: darf nicht neben „Hand abschließen“ gleich
+    // gewichtig wirken.
+    root.appendChild(h('div', { class: 'center-link' }, [h('button', {
+      type: 'button', class: 'link danger',
+      text: 'Hand abbrechen',
+      onclick: function () {
+        confirmModal('Hand abbrechen?',
+          'Die Einsätze dieser Hand werden verworfen. Guthaben ändern sich nicht – '
+          + 'gebucht wird erst beim Abschließen.',
+          'Abbrechen', function () {
+            state.hand = null; showdownWinners = null;
+            save(); renderGame();
+            toast('Hand verworfen.');
+          });
+      }
+    })]));
+
+    if (!istShowdown) renderActionBar(hand);
+  }
+
+  /* ---- Aktionsleiste am unteren Rand ---- */
+
+  function renderActionBar(hand) {
+    var alt = document.getElementById('actionbar');
+    if (alt) alt.remove();
+
+    var bar = h('div', { class: 'actionbar', id: 'actionbar' });
+    document.body.appendChild(bar);
+    byId('view-game').classList.add('with-actionbar');
+
+    if (E.isStreetComplete(hand)) {
+      var i = E.STREETS.indexOf(hand.street);
+      var naechste = E.STREET_NAMES[E.STREETS[i + 1]];
+      bar.appendChild(h('button', {
+        type: 'button', class: 'btn btn-primary btn-block btn-lg',
+        text: 'Weiter zum ' + naechste,
+        onclick: function () { E.nextStreet(hand); handStep(); save(); renderGame(); }
+      }));
+      return;
+    }
+
+    var opt = E.options(hand);
+    if (!opt) return;
+    var p = playerById(opt.player.id);
+    var name = p ? p.name : 'Spieler';
+
+    bar.appendChild(h('div', { class: 'actionbar-head' }, [
+      h('span', { class: 'nm', text: name + ' ist am Zug' }),
+      h('span', { class: 'st', text: 'Stack ' + money(opt.player.stack) })
+    ]));
+
+    var raisePanel = h('div', { class: 'raise-panel hidden' });
+    bar.appendChild(raisePanel);
+
+    var buttons = h('div', { class: 'action-row' }, [
+      h('button', {
+        type: 'button', class: 'act act-fold',
+        onclick: function () { tuAktion('fold'); }
+      }, [h('span', { text: 'Aussteigen' })]),
+
+      opt.canCheck
+        ? h('button', {
+            type: 'button', class: 'act act-call',
+            onclick: function () { tuAktion('check'); }
+          }, [h('span', { text: 'Schieben' })])
+        : h('button', {
+            type: 'button', class: 'act act-call',
+            onclick: function () { tuAktion(opt.toCall >= opt.player.stack ? 'allin' : 'call'); }
+          }, [h('span', { text: opt.toCall >= opt.player.stack ? 'All-in' : 'Mitgehen' }),
+              h('small', { text: money(opt.toCall) })]),
+
+      opt.canRaise
+        ? h('button', {
+            type: 'button', class: 'act act-raise',
+            onclick: function () { raisePanel.classList.toggle('hidden'); }
+          }, [h('span', { text: opt.isAllInRaise ? 'All-in' : 'Erhöhen' }),
+              h('small', { text: 'ab ' + C.formatCents(opt.minRaiseTo) })])
+        : h('button', { type: 'button', class: 'act', disabled: true }, [h('span', { text: 'Erhöhen' })])
+    ]);
+    bar.appendChild(buttons);
+
+    /* ---- Erhöhen: Betrag wählen ---- */
+    if (opt.canRaise) {
+      var pot = E.potTotal(hand);
+      var input = h('input', {
+        class: 'input', type: 'text', inputmode: 'decimal',
+        value: C.formatCents(opt.minRaiseTo),
+        onfocus: function () { input.select(); }
+      });
+      var vorschlaege = [
+        { label: 'Minimum', wert: opt.minRaiseTo },
+        { label: '½ Pot', wert: Math.min(opt.maxRaiseTo, Math.max(opt.minRaiseTo, E.maxBet(hand) + Math.round(pot / 2))) },
+        { label: 'Pot', wert: Math.min(opt.maxRaiseTo, Math.max(opt.minRaiseTo, E.maxBet(hand) + pot)) },
+        { label: 'All-in', wert: opt.maxRaiseTo }
+      ].filter(function (v, idx, arr) {
+        // Fallen zwei Vorschläge auf denselben Betrag, gewinnt der spätere –
+        // sonst stünde „Minimum“ auf einem Button, der in Wahrheit All-in ist.
+        for (var j = arr.length - 1; j > idx; j--) if (arr[j].wert === v.wert) return false;
+        return true;
+      });
+
+      raisePanel.appendChild(h('div', { class: 'chiprow' }, vorschlaege.map(function (v) {
+        return h('button', {
+          type: 'button', class: 'chip',
+          onclick: function () { input.value = C.formatCents(v.wert); }
+        }, [h('span', { text: v.label }), h('small', { text: C.formatCents(v.wert) })]);
+      })));
+      raisePanel.appendChild(h('div', { class: 'inline-form' }, [
+        input,
+        h('button', {
+          type: 'button', class: 'btn btn-primary', text: 'Setzen',
+          onclick: function () {
+            var c = C.parseAmount(input.value);
+            if (c === null) { toast('Bitte einen gültigen Betrag eingeben.'); return; }
+            tuAktion(c >= opt.maxRaiseTo ? 'allin' : 'raise', c);
+          }
+        })
+      ]));
+      raisePanel.appendChild(h('p', { class: 'hint', style: 'margin:8px 0 0',
+        text: 'Gesamteinsatz dieser Runde, nicht der Betrag zum Nachlegen.' }));
+    }
+  }
+
+  /* ---- Showdown: Gewinner je Pot ---- */
+
+  function renderShowdown(root, hand, potListe) {
+    if (!showdownWinners || showdownWinners.length !== potListe.length) {
+      // Wo es nur einen Berechtigten gibt, steht der Gewinner schon fest.
+      showdownWinners = potListe.map(function (pot) {
+        return pot.eligible.length === 1 ? [pot.eligible[0]] : [];
+      });
+    }
+
+    potListe.forEach(function (pot, i) {
+      var card = h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [
+          h('h2', { text: pot.label }),
+          h('span', { class: 'sub', text: money(pot.amount) })
+        ])
+      ]);
+
+      card.appendChild(h('div', { class: 'pills' }, pot.eligible.map(function (id) {
+        var on = showdownWinners[i].indexOf(id) !== -1;
+        return h('button', {
+          type: 'button', class: 'pill' + (on ? ' is-on' : ''),
+          onclick: function () {
+            var k = showdownWinners[i].indexOf(id);
+            if (k === -1) showdownWinners[i].push(id); else showdownWinners[i].splice(k, 1);
+            renderGame();
+          }
+        }, [icon('i-check'), nameOf(id)]);
+      })));
+
+      if (showdownWinners[i].length) {
+        card.appendChild(h('div', { class: 'payout-preview' },
+          C.splitEven(pot.amount, showdownWinners[i]).map(function (x) {
+            return h('div', { class: 'payout-line' }, [
+              h('span', { class: 'nm', text: nameOf(x.playerId) }),
+              x.odd ? h('span', { class: 'tag', text: '+1 Cent Rest' }) : null,
+              h('span', { class: 'amt', text: '+' + money(x.amount) })
+            ]);
+          })));
+      } else {
+        card.appendChild(h('p', { class: 'hint',
+          text: pot.eligible.length > 1 ? 'Mehrere auswählen für einen geteilten Pot.' : '' }));
+      }
+      root.appendChild(card);
+    });
+
+    var zurueck = E.refunds(hand);
+    if (zurueck.length) {
+      root.appendChild(h('div', { class: 'card' }, [
+        h('div', { class: 'card-head' }, [h('h2', { text: 'Zurück an die Einzahler' })]),
+        h('div', { class: 'payout-preview', style: 'border:0;padding-top:0' },
+          zurueck.map(function (r) {
+            return h('div', { class: 'payout-line' }, [
+              h('span', { class: 'nm', text: nameOf(r.playerId) }),
+              h('span', { class: 'amt', text: '+' + money(r.amount) })
+            ]);
+          })),
+        h('p', { class: 'hint', text: 'Diesen Teil des Pots konnte niemand mehr gewinnen – '
+          + 'er geht an die Spieler zurück, die ihn eingezahlt haben.' })
+      ]));
+    }
+
+    var offen = showdownWinners.filter(function (w) { return !w.length; }).length;
+    root.appendChild(h('button', {
+      type: 'button', class: 'btn btn-primary btn-block btn-lg', disabled: offen > 0,
+      text: offen > 0 ? 'Gewinner auswählen' : 'Hand abschließen',
+      onclick: bucheHand
+    }));
+  }
+
+  function bucheHand() {
+    var hand = state.hand;
+    var res = E.settle(hand, showdownWinners, C.splitEven);
+    var ev = {
+      type: 'hand',
+      contributions: E.contributions(hand),
+      payouts: res.payouts.filter(function (x) { return x.amount > 0; })
+    };
+    var gesamt = E.potTotal(hand);
+    var gewinner = [];
+    showdownWinners.forEach(function (w) {
+      w.forEach(function (id) { if (gewinner.indexOf(id) === -1) gewinner.push(id); });
+    });
+
+    addEvent(ev);
+    state.hand = null;
+    showdownWinners = null;
+    if (state.table.seats.length) {
+      state.table.dealer = (state.table.dealer + 1) % state.table.seats.length;
+    }
+    save();
+    renderGame();
+
+    toast(money(gesamt) + ' an ' + gewinner.map(nameOf).join(' & '), {
+      label: 'Rückgängig',
+      run: function () {
+        removeEvent(ev.id);
+        if (state.table.seats.length) {
+          state.table.dealer = (state.table.dealer - 1 + state.table.seats.length) % state.table.seats.length;
+        }
+        save(); renderGame();
+        toast('Hand zurückgenommen. Die Einsätze musst du neu eintragen.');
+      }
+    });
+  }
+
+  /* ---- Schnelleingabe: Beträge direkt eintippen, ohne Spielablauf ---- */
+  function renderQuick(root) {
     var players = tablePlayers();
 
     /* ---- Pot ---- */
@@ -1390,6 +1884,7 @@
     // dauert nur Millisekunden, verhindert aber Zugriffe auf undefined.
     state = C.createState();
     draft = loadDraft();
+    try { gameMode = localStorage.getItem(MODE_KEY) === 'quick' ? 'quick' : 'table'; } catch (e) { /* egal */ }
 
     S.load().then(function (res) {
       if (res.data) state = C.normalizeState(res.data);
