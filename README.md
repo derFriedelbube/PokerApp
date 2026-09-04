@@ -30,29 +30,32 @@ Rundungsfehler verloren: Die Summe der Anteile ist immer exakt der Pot.
 
 ---
 
-## 1. App ins Netz stellen (einmalig, ca. 2 Minuten)
+## 1. Die Adresse der App
 
-Damit sich die App aufs Handy installieren lässt, muss sie über **https**
-erreichbar sein. Am einfachsten geht das gratis über GitHub Pages:
-
-1. Dieses Repository auf GitHub öffnen.
-2. Oben auf **Settings** klicken.
-3. Links im Menü auf **Pages**.
-4. Bei *Source* **„Deploy from a branch“** auswählen.
-5. Bei *Branch* den Branch `claude/poker-money-tracker-app-s1l0x4` (oder `main`,
-   falls schon zusammengeführt) und den Ordner **`/ (root)`** wählen.
-6. Auf **Save** klicken und ein bis zwei Minuten warten.
-
-Danach ist die App erreichbar unter:
+Die App ist bereits veröffentlicht und erreichbar unter:
 
 ```
 https://derfriedelbube.github.io/PokerApp/
 ```
 
+Um das Veröffentlichen kümmert sich der Workflow `.github/workflows/pages.yml`:
+Bei jedem Push auf `claude/poker-money-tracker-app-s1l0x4` oder `main` lädt er
+die Dateien unverändert zu GitHub Pages hoch. Es gibt keinen Build-Schritt.
+
+### Falls die Adresse einen 404 zeigt
+
+Dann steht die Veröffentlichungsquelle nicht richtig. Unter
+**Settings → Pages → Build and deployment → Source** muss **„GitHub Actions"**
+ausgewählt sein (nicht „Deploy from a branch"). Danach unter **Actions** den
+Workflow *GitHub Pages* auswählen und **Run workflow** anstoßen – oder einfach
+den nächsten Push abwarten.
+
+Unter **Actions** ist auch zu sehen, ob ein Deployment gelaufen ist und ob es
+erfolgreich war. Nach dem ersten Mal dauert es ein bis zwei Minuten, bis die
+Adresse antwortet.
+
 > **Hinweis:** GitHub Pages funktioniert bei kostenlosen Konten nur für
-> **öffentliche** Repositories. Ist das Repo privat, macht es entweder unter
-> *Settings → General → Danger Zone → Change visibility* öffentlich, oder nutzt
-> eine der Alternativen weiter unten.
+> **öffentliche** Repositories. Dieses Repository ist öffentlich, damit passt es.
 
 ### Alternativen zu GitHub Pages
 
@@ -117,6 +120,7 @@ noch einmal erklärt (oder die Installation direkt startet).
 ## Aufbau des Projekts
 
 ```
+.github/workflows/      Veröffentlicht die App bei jedem Push auf GitHub Pages
 index.html              Grundgerüst und Icon-Sammlung
 css/styles.css          Gestaltung (dunkel, für Handys ausgelegt)
 js/core.js              Rechenkern: Beträge, Pot-Aufteilung, Guthaben, Abrechnung
