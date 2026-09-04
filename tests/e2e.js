@@ -149,6 +149,62 @@ function check(cond, label, extra) {
   check(await page.locator('#view-players .rows .row').count() === 3, 'Spieler nach Neuladen noch da');
   check((await balOf('Anna')).startsWith('9,95 €'), 'Guthaben nach Neuladen unverändert');
 
+  // --- Speicherung: beide Speicher, Ausfall eines Speichers, Sicherungen ---
+  console.log('\nSpeicherung');
+  const inIdb = await page.evaluate(() => new Promise(res => {
+    const r = indexedDB.open('pokerkasse');
+    r.onsuccess = () => {
+      const g = r.result.transaction('kv').objectStore('kv').get('state');
+      g.onsuccess = () => res(g.result ? { players: g.result.players.length, events: g.result.events.length } : null);
+      g.onerror = () => res(null);
+    };
+    r.onerror = () => res(null);
+  }));
+  check(inIdb && inIdb.players === 3, 'Daten liegen in der Datenbank (IndexedDB)',
+    'war: ' + JSON.stringify(inIdb));
+  check(await page.evaluate(() => !!localStorage.getItem('pokerkasse.v1')),
+    'Daten liegen zusätzlich im Browserspeicher');
+
+  // Der entscheidende Test: ein Speicher wird geleert – die App muss sich
+  // aus dem anderen erholen.
+  await page.evaluate(() => localStorage.clear());
+  await page.reload({ waitUntil: 'networkidle' });
+  await page.click('.tab[data-view="players"]');
+  check(await page.locator('#view-players .rows .row').count() === 3,
+    'Verlust des Browserspeichers wird aus der Datenbank ausgeglichen');
+  check((await balOf('Anna')).startsWith('9,95 €'), 'Guthaben dabei unverändert', 'war: ' + await balOf('Anna'));
+  check(await page.evaluate(() => !!localStorage.getItem('pokerkasse.v1')),
+    'fehlende Kopie wird selbstständig wieder angelegt');
+
+  // Sicherungen: anlegen, auflisten, zurückspielen.
+  await page.evaluate(() => window.PokerStore.snapshot(
+    JSON.parse(localStorage.getItem('pokerkasse.v1')), 'Test'));
+  const snaps = await page.evaluate(() => window.PokerStore.list());
+  check(snaps && snaps.length >= 1, 'Sicherung wurde angelegt', 'war: ' + JSON.stringify(snaps));
+
+  await page.click('#btn-settings');
+  await page.click('.modal button:has-text("Sicherungen")');
+  await page.locator('.modal .row').first().waitFor({ timeout: 5000 });   // Liste lädt asynchron
+  check(await page.locator('.modal .row').count() >= 1, 'Sicherungen sind in den Einstellungen sichtbar');
+  await page.screenshot({ path: SHOTS + '/7-sicherungen.png' });
+  await page.click('.modal-actions button:has-text("Schließen")');
+
+  // Alles löschen – und aus der automatisch davor angelegten Sicherung zurückholen.
+  await page.click('#btn-settings');
+  await page.click('.modal button:has-text("Alle Daten löschen")');
+  await page.click('.modal-actions button:has-text("Alles löschen")');
+  await page.click('.tab[data-view="players"]');
+  check(await page.locator('#view-players .rows .row').count() === 0, 'Löschen entfernt alle Spieler');
+
+  await page.click('#btn-settings');
+  await page.click('.modal button:has-text("Sicherungen")');
+  await page.locator('.modal .row').first().locator('button:has-text("Laden")').click();
+  await page.click('.modal-actions button:has-text("Laden")');
+  await page.click('.tab[data-view="players"]');
+  check(await page.locator('#view-players .rows .row').count() === 3,
+    'versehentliches Löschen lässt sich aus der Sicherung zurückholen');
+  check((await balOf('Anna')).startsWith('9,95 €'), 'Guthaben aus der Sicherung korrekt');
+
   // --- Offline ------------------------------------------------------------
   await ctx.setOffline(true);
   await page.reload({ waitUntil: 'domcontentloaded' }).catch(() => {});

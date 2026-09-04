@@ -1,12 +1,13 @@
 /* Service Worker: macht die App offline nutzbar.
    Bei jeder Änderung an den Dateien CACHE hochzählen – dann holt sich die
    installierte App beim nächsten Start automatisch die neue Version. */
-var CACHE = 'pokerkasse-v1';
+var CACHE = 'pokerkasse-v2';
 var ASSETS = [
   './',
   './index.html',
   './css/styles.css',
   './js/core.js',
+  './js/store.js',
   './js/app.js',
   './manifest.webmanifest',
   './icons/icon-192.png',

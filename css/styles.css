@@ -275,6 +275,37 @@ h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -.01em; }
 .rest-note.ok { color: var(--green); }
 .rest-note.bad { color: var(--gold); }
 
+/* ========================================================== Speicherstatus */
+.storage-box {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 11px 12px;
+  margin-bottom: 14px;
+  display: flex; flex-direction: column; gap: 8px;
+}
+.storage-line {
+  display: flex; align-items: flex-start; gap: 8px;
+  font-size: 12.5px; color: var(--muted); line-height: 1.42;
+}
+.storage-line svg { width: 14px; height: 14px; fill: currentColor; flex: none; margin-top: 2px; }
+.storage-line.ok   { color: var(--green); }
+.storage-line.warn { color: var(--gold); }
+.storage-line.bad  { color: var(--red); }
+
+.notice {
+  display: flex; gap: 11px; align-items: flex-start;
+  background: rgba(243,195,81,.09);
+  border: 1px solid rgba(243,195,81,.34);
+  border-radius: var(--radius);
+  padding: 13px;
+  margin-bottom: 12px;
+}
+.notice svg { width: 18px; height: 18px; fill: var(--gold); flex: none; margin-top: 1px; }
+.notice .body { flex: 1; min-width: 0; }
+.notice .title { font-size: 14.5px; font-weight: 650; margin-bottom: 3px; }
+.notice .text { font-size: 13px; color: var(--muted); line-height: 1.45; }
+
 /* ================================================================= Buttons */
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;

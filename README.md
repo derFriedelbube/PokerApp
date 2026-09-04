@@ -101,6 +101,45 @@ noch einmal erklärt (oder die Installation direkt startet).
 
 ---
 
+## Wo die Daten liegen
+
+Die App braucht keinen Server und kein Konto – alles bleibt auf dem Handy.
+Damit dabei nichts verloren geht, wird mehrfach abgesichert:
+
+* **Zwei Speicher gleichzeitig.** Jeder Stand wird sowohl in die Datenbank des
+  Browsers (IndexedDB) als auch in den Browserspeicher (localStorage)
+  geschrieben. Wird einer davon geleert, holt die App die Daten beim nächsten
+  Start aus dem anderen und legt die fehlende Kopie neu an.
+* **Dauerhafter Speicher.** Die App fordert beim Start
+  `navigator.storage.persist()` an. Ohne diese Zusage darf ein Browser
+  gespeicherte Daten bei Platzmangel von sich aus löschen; mit ihr nicht.
+  Als installierte App vom Home-Bildschirm wird sie in der Regel erteilt.
+* **Automatische Sicherungen.** Einmal täglich und immer vor Schritten, die
+  Daten überschreiben (Sicherung laden, alles löschen, Abend abschließen),
+  legt die App eine Kopie an. Die letzten zwölf lassen sich unter
+  *Einstellungen → Sicherungen* zurückspielen.
+* **Export.** Unter *Kasse → Daten → Sichern* gibt es alles als JSON-Datei.
+  Das ist die einzige Kopie, die einen Handyverlust übersteht – und der Weg,
+  die Daten auf ein anderes Gerät zu bringen. Nach zwei Wochen ohne Export
+  erinnert die App daran.
+
+Unter *Einstellungen* steht jederzeit, in welchen Speichern die Daten liegen,
+ob sie als dauerhaft bestätigt sind, wie viele Sicherungen es gibt und wann
+zuletzt exportiert wurde.
+
+### Wichtig für das iPhone
+
+Safari löscht Daten von Webseiten, die **sieben Tage** lang nicht benutzt
+wurden. Für Web-Apps, die auf dem **Home-Bildschirm installiert** sind, gilt
+diese Regel **nicht**. Öffnet die Pokerkasse also über das installierte Symbol
+und nicht als Lesezeichen in Safari.
+
+Was auch der beste lokale Speicher nicht abfängt: ein verlorenes Handy, ein
+Zurücksetzen des Geräts oder „Website-Daten löschen". Dagegen hilft nur der
+Export.
+
+---
+
 ## 3. So läuft ein Abend ab
 
 1. **Spieler** → alle Namen eintragen. Wer heute nicht mitspielt, wird mit dem
@@ -124,6 +163,7 @@ noch einmal erklärt (oder die Installation direkt startet).
 index.html              Grundgerüst und Icon-Sammlung
 css/styles.css          Gestaltung (dunkel, für Handys ausgelegt)
 js/core.js              Rechenkern: Beträge, Pot-Aufteilung, Guthaben, Abrechnung
+js/store.js             Speicherung: zwei Speicher, Sicherungen, Dauerhaftigkeit
 js/app.js               Oberfläche: Ansichten, Eingaben, Speichern
 sw.js                   Service Worker – macht die App offline nutzbar
 manifest.webmanifest    Angaben für die Installation (Name, Symbole, Farben)
@@ -148,7 +188,10 @@ node tests/e2e.js                     # kompletter Durchlauf im Browser
 Der Browser-Test braucht Playwright (`npm i -D playwright`) und spielt einen
 ganzen Abend durch: Spieler anlegen, Runden mit einem und mehreren Gewinnern,
 Rest-Cent-Verteilung, Side-Pot, Einzahlung, Löschen im Verlauf, Abrechnung,
-Neustart und Offline-Betrieb.
+Neustart und Offline-Betrieb. Dazu die Speicherung: dass die Daten in beiden
+Speichern ankommen, dass ein geleerter Speicher aus dem anderen wieder
+aufgefüllt wird und dass sich ein versehentliches Löschen aus der Sicherung
+zurückholen lässt.
 
 ## Änderungen an der App
 

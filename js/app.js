@@ -7,7 +7,7 @@
   'use strict';
 
   var C = window.PokerCore;
-  var KEY = 'pokerkasse.v1';
+  var S = window.PokerStore;
   var DRAFT_KEY = 'pokerkasse.draft.v1';
   var SVG_NS = 'http://www.w3.org/2000/svg';
 
@@ -79,23 +79,17 @@
 
   /* ========================================================== Persistenz */
 
-  function load() {
-    var raw = null;
-    try { raw = localStorage.getItem(KEY); } catch (e) { /* Privatmodus */ }
-    if (!raw) return C.createState();
-    try { return C.normalizeState(JSON.parse(raw)); }
-    catch (e) { return C.createState(); }
-  }
-
+  /**
+   * Schreibt in beide Speicher. Gewarnt wird nur, wenn wirklich keiner der
+   * beiden die Daten annehmen konnte – sonst sind sie sicher.
+   */
   function save() {
-    try {
-      localStorage.setItem(KEY, JSON.stringify(state));
-    } catch (e) {
-      if (!storageWarned) {
+    S.save(state).then(function (res) {
+      if (!res.ok && !storageWarned) {
         storageWarned = true;
-        toast('Speichern nicht möglich – Daten gehen beim Schließen verloren.');
+        toast('Speichern nicht möglich – bitte die Daten exportieren und sichern.');
       }
-    }
+    });
   }
 
   function emptyDraft() {
@@ -999,6 +993,8 @@
     }
     root.appendChild(settleCard);
 
+    backupReminder(root);
+
     /* ---- Aktionen ---- */
     root.appendChild(h('div', { class: 'card' }, [
       h('div', { class: 'card-head' }, [h('h2', { text: 'Abend beenden' })]),
@@ -1016,9 +1012,34 @@
         h('button', { type: 'button', class: 'btn', text: 'Sichern', onclick: exportData }),
         h('button', { type: 'button', class: 'btn', text: 'Laden', onclick: importData })
       ]),
-      h('p', { class: 'hint', text: 'Die Daten liegen nur auf diesem Gerät. Sichere sie ab und zu, '
-        + 'oder übertrage sie so auf ein anderes Handy.' })
+      h('button', { type: 'button', class: 'btn btn-block', style: 'margin-top:8px',
+        text: 'Sicherungen', onclick: backupsSheet }),
+      h('p', { class: 'hint', text: 'Die Daten liegen doppelt auf diesem Gerät und werden '
+        + 'automatisch gesichert. Ein Export ist die einzige Kopie außerhalb des Handys – '
+        + 'damit lassen sie sich auch auf ein anderes Gerät übertragen.' })
     ]));
+  }
+
+  /**
+   * Erinnert daran, die Daten zu exportieren – die einzige Kopie, die einen
+   * Handyverlust ueberlebt. Erscheint erst, wenn es wirklich etwas zu verlieren gibt.
+   */
+  function backupReminder(root) {
+    if (state.events.length < 5) return;
+    var last = S.lastExport();
+    var alter = last ? Date.now() - last : Infinity;
+    if (alter < 14 * 864e5) return;
+
+    root.insertBefore(h('div', { class: 'notice' }, [
+      icon('i-share'),
+      h('div', { class: 'body' }, [
+        h('div', { class: 'title', text: last ? 'Letzte Sicherung ist eine Weile her' : 'Noch keine Sicherung' }),
+        h('div', { class: 'text', text: 'Geht das Handy verloren, sind auch die Daten weg. '
+          + 'Ein Export dauert ein paar Sekunden.' }),
+        h('button', { type: 'button', class: 'btn btn-sm', style: 'margin-top:9px',
+          text: 'Jetzt sichern', onclick: exportData })
+      ])
+    ]), root.firstChild);
   }
 
   function closeSession() {
@@ -1029,6 +1050,7 @@
         ? 'Die Guthaben von ' + open.length + ' Spieler(n) werden auf 0 gesetzt. Der Verlauf bleibt erhalten.'
         : 'Startet eine neue Abrechnung. Der Verlauf bleibt erhalten.',
       'Abschließen', function () {
+        S.snapshot(state, 'vor dem Abschluss des Abends');
         open.forEach(function (p) {
           addEvent({ type: 'settle', playerId: p.id, amount: -stats[p.id].balance });
         });
@@ -1050,7 +1072,7 @@
       text: state.players.length + ' Spieler, ' + state.events.length + ' Einträge.' })];
 
     var dl = h('a', { class: 'btn btn-block btn-primary', href: url, download: name,
-      style: 'margin-bottom:8px', text: 'Als Datei speichern' });
+      style: 'margin-bottom:8px', text: 'Als Datei speichern', onclick: function () { S.markExported(); } });
     body.push(dl);
 
     if (navigator.share) {
@@ -1059,9 +1081,11 @@
         onclick: function () {
           var file = new File([json], name, { type: 'application/json' });
           if (navigator.canShare && navigator.canShare({ files: [file] })) {
-            navigator.share({ files: [file], title: 'Pokerkasse-Sicherung' }).catch(function () {});
+            navigator.share({ files: [file], title: 'Pokerkasse-Sicherung' })
+              .then(function () { S.markExported(); }).catch(function () {});
           } else {
-            navigator.share({ title: 'Pokerkasse-Sicherung', text: json }).catch(function () {});
+            navigator.share({ title: 'Pokerkasse-Sicherung', text: json })
+              .then(function () { S.markExported(); }).catch(function () {});
           }
         }
       }));
@@ -1071,7 +1095,7 @@
       onclick: function () {
         if (navigator.clipboard) {
           navigator.clipboard.writeText(json)
-            .then(function () { toast('Daten kopiert.'); })
+            .then(function () { S.markExported(); toast('Daten kopiert.'); })
             .catch(function () { toast('Kopieren nicht möglich.'); });
         } else { toast('Kopieren wird hier nicht unterstützt.'); }
       }
@@ -1101,10 +1125,13 @@
         next.players.length + ' Spieler und ' + next.events.length + ' Einträge werden geladen. '
         + 'Die aktuellen Daten auf diesem Gerät gehen dabei verloren.',
         'Ersetzen', function () {
-          state = next;
-          resetDraft();
-          save(); render();
-          toast('Daten geladen.');
+          // Erst den bisherigen Stand sichern, dann ersetzen.
+          S.snapshot(state, 'vor dem Laden einer Sicherung').then(function () {
+            state = next;
+            resetDraft();
+            save(); render();
+            toast('Daten geladen. Der vorherige Stand liegt als Sicherung bereit.');
+          });
         });
       return true;
     }
@@ -1138,7 +1165,121 @@
 
   /* ======================================================= Einstellungen */
 
+  /** Zeigt an, wo die Daten liegen und ob der Browser sie dauerhaft behält. */
+  function storageStatusBox() {
+    var box = h('div', { class: 'storage-box' }, [
+      h('div', { class: 'storage-line', text: 'Speicher wird geprüft …' })
+    ]);
+    S.status().then(function (st) {
+      box.textContent = '';
+      var mb = function (b) { return b == null ? '?' : (b / 1048576).toFixed(1).replace('.', ',') + ' MB'; };
+
+      var orte = [];
+      if (st.indexedDB) orte.push('Datenbank');
+      if (st.localStorage) orte.push('Browserspeicher');
+
+      box.appendChild(h('div', { class: 'storage-line' + (orte.length > 1 ? ' ok' : orte.length ? '' : ' bad') }, [
+        icon(orte.length ? 'i-check' : 'i-close'),
+        h('span', { text: orte.length
+          ? 'Gespeichert in: ' + orte.join(' + ')
+          : 'Kein Speicher verfügbar – bitte Daten exportieren!' })
+      ]));
+
+      box.appendChild(h('div', { class: 'storage-line' + (st.persisted ? ' ok' : ' warn') }, [
+        icon(st.persisted ? 'i-check' : 'i-clock'),
+        h('span', { text: st.persisted === true
+          ? 'Dauerhaft – der Browser löscht die Daten nicht von selbst'
+          : st.persisted === false
+            ? 'Noch nicht als dauerhaft bestätigt (nach der Installation auf dem Home-Bildschirm meist automatisch)'
+            : 'Dauerhaftigkeit lässt sich hier nicht abfragen' })
+      ]));
+
+      if (st.snapshots !== null) {
+        box.appendChild(h('div', { class: 'storage-line' }, [
+          icon('i-clock'),
+          h('span', { text: st.snapshots + (st.snapshots === 1 ? ' Sicherung' : ' Sicherungen') + ' vorhanden' })
+        ]));
+      }
+
+      box.appendChild(h('div', { class: 'storage-line' + (st.lastExport ? '' : ' warn') }, [
+        icon('i-share'),
+        h('span', { text: st.lastExport
+          ? 'Zuletzt exportiert: ' + new Date(st.lastExport).toLocaleDateString('de-DE')
+          : 'Noch nie exportiert – eine Kopie außerhalb des Handys fehlt' })
+      ]));
+
+      if (st.usage != null) {
+        box.appendChild(h('div', { class: 'storage-line' }, [
+          icon('i-money'), h('span', { text: 'Belegt: ' + mb(st.usage) + ' von ' + mb(st.quota) })
+        ]));
+      }
+    });
+    return box;
+  }
+
+  /** Liste der automatischen Sicherungen mit Wiederherstellung. */
+  function backupsSheet() {
+    var list = h('div', { class: 'rows' }, [h('p', { class: 'hint', text: 'Wird geladen …' })]);
+
+    S.list().then(function (all) {
+      list.textContent = '';
+      if (all === null) {
+        list.appendChild(h('p', { class: 'hint',
+          text: 'Auf diesem Gerät sind keine automatischen Sicherungen möglich. '
+            + 'Sichere die Daten stattdessen regelmäßig als Datei.' }));
+        return;
+      }
+      if (!all.length) {
+        list.appendChild(h('p', { class: 'hint',
+          text: 'Noch keine Sicherungen. Es wird automatisch eine angelegt – einmal täglich '
+            + 'und immer vor Schritten, die Daten überschreiben.' }));
+        return;
+      }
+      all.forEach(function (snap) {
+        var when = new Date(snap.ts).toLocaleString('de-DE',
+          { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+        list.appendChild(h('div', { class: 'row' }, [
+          h('div', { class: 'who' }, [
+            h('div', { class: 'name', text: when }),
+            h('div', { class: 'sub', text: snap.players + ' Spieler · ' + snap.events + ' Einträge'
+              + (snap.reason ? ' · ' + snap.reason : '') })
+          ]),
+          h('button', {
+            type: 'button', class: 'btn btn-sm', text: 'Laden',
+            onclick: function () {
+              S.get(snap.id).then(function (data) {
+                if (!data) { toast('Diese Sicherung lässt sich nicht lesen.'); return; }
+                var next = C.normalizeState(data);
+                closeModal();
+                confirmModal('Sicherung vom ' + when + ' laden?',
+                  next.players.length + ' Spieler und ' + next.events.length + ' Einträge. '
+                  + 'Der aktuelle Stand wird vorher automatisch gesichert.',
+                  'Laden', function () {
+                    S.snapshot(state, 'vor dem Zurücksetzen auf eine Sicherung').then(function () {
+                      state = next;
+                      resetDraft();
+                      save(); render();
+                      toast('Sicherung geladen.');
+                    });
+                  });
+              });
+            }
+          })
+        ]));
+      });
+    });
+
+    modal({
+      title: 'Sicherungen',
+      sub: 'Automatische Kopien auf diesem Gerät. Sie schützen vor Fehlgriffen, '
+        + 'nicht vor einem verlorenen Handy – dafür ist der Export da.',
+      body: [list], focus: false,
+      actions: [{ label: 'Schließen' }]
+    });
+  }
+
   function settingsSheet() {
+    var storageBox = storageStatusBox();
     var cur = h('input', { class: 'input', type: 'text', value: state.settings.currency, maxlength: '4' });
     var chips = h('input', {
       class: 'input', type: 'text', inputmode: 'decimal',
@@ -1155,6 +1296,17 @@
         ]),
         h('p', { class: 'hint', style: 'margin-bottom:16px',
           text: 'Die Chip-Werte sind die Schnellwahl-Beträge beim Eintragen der Einsätze.' }),
+        storageBox,
+        h('button', {
+          type: 'button', class: 'btn btn-block', text: 'Sicherungen', style: 'margin-bottom:8px',
+          onclick: function () { closeModal(); backupsSheet(); }
+        }),
+        h('div', { class: 'btn-row', style: 'margin-bottom:8px' }, [
+          h('button', { type: 'button', class: 'btn', text: 'Daten sichern',
+            onclick: function () { closeModal(); exportData(); } }),
+          h('button', { type: 'button', class: 'btn', text: 'Daten laden',
+            onclick: function () { closeModal(); importData(); } })
+        ]),
         h('button', {
           type: 'button', class: 'btn btn-block', text: 'Installation auf dem Handy',
           style: 'margin-bottom:8px', onclick: function () { closeModal(); installHelp(); }
@@ -1166,10 +1318,13 @@
             confirmModal('Wirklich alles löschen?',
               'Spieler, Guthaben und der gesamte Verlauf werden unwiderruflich entfernt.',
               'Alles löschen', function () {
-                state = C.createState();
-                resetDraft();
-                save(); render();
-                toast('Alle Daten gelöscht.');
+                // Ein Fehlgriff bleibt so umkehrbar.
+                S.snapshot(state, 'vor dem Löschen aller Daten').then(function (id) {
+                  state = C.createState();
+                  resetDraft();
+                  save(); render();
+                  toast(id ? 'Gelöscht. Der alte Stand liegt als Sicherung bereit.' : 'Alle Daten gelöscht.');
+                });
               });
           }
         })
@@ -1231,8 +1386,21 @@
   /* =============================================================== Start */
 
   function init() {
-    state = load();
+    // Bis die Daten geladen sind, mit einem leeren Zustand arbeiten – das
+    // dauert nur Millisekunden, verhindert aber Zugriffe auf undefined.
+    state = C.createState();
     draft = loadDraft();
+
+    S.load().then(function (res) {
+      if (res.data) state = C.normalizeState(res.data);
+      draft = loadDraft();
+      render();
+      // Den Browser bitten, die Daten nicht selbsttaetig zu loeschen,
+      // und einmal am Tag eine Sicherung anlegen.
+      S.requestPersistence();
+      S.autoSnapshot(state);
+      if (res.hadIdb !== res.hadLs) save();   // fehlende Kopie ergaenzen
+    });
 
     document.querySelectorAll('.tab').forEach(function (t) {
       t.addEventListener('click', function () {
